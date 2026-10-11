@@ -1,4 +1,4 @@
-"""渲染余额条各状态为 PNG,供视觉检查。"""
+"""渲染余额条各状态(含 DeepSeek 模式)为 PNG,供视觉检查。"""
 
 import os
 import sys
@@ -24,39 +24,57 @@ def snap(widget, name):
     print("saved", name)
 
 
-def make_bar(remaining, status="online"):
+def codex_payload(remaining, status="online"):
+    primary = None
+    if remaining is not None:
+        primary = {"used": 100 - remaining, "remaining": remaining,
+                   "resets_at": time.time() + 5400}
+    return {"active": "codex", "status": status, "model": "gpt-5.2",
+            "codex": {"plan_type": "plus", "primary": primary,
+                      "secondary": {"used": 43, "remaining": 57,
+                                    "resets_at": time.time() + 3 * 86400}},
+            "codex_status": status, "deepseek": None, "ds_status": "offline"}
+
+
+def ds_payload(total, status="online"):
+    return {"active": "deepseek", "status": status, "model": "deepseek-flash",
+            "codex": {"plan_type": "plus",
+                      "primary": {"used": 12, "remaining": 88, "resets_at": None},
+                      "secondary": {"used": 43, "remaining": 57, "resets_at": None}},
+            "codex_status": "online",
+            "deepseek": {"total": total, "granted": 0, "topped_up": total,
+                         "currency": "CNY", "is_available": True,
+                         "updated_at": time.time()},
+            "ds_status": status}
+
+
+def make_bar(payload):
     bar = TaskbarBar()
     bar._tick_timer.stop()
     bar._anchor_timer.stop()
-    if status == "online" and remaining is not None:
-        data = {"primary": {"used": 100 - remaining, "remaining": remaining,
-                            "resets_at": time.time() + 5400},
-                "secondary": {}}
-        bar.set_limits(data, "online")
-    else:
-        bar.set_limits(None, status)
+    bar.set_state(payload)
     bar.show()
     return bar
 
 
 bars = [
-    ("bar_full.png", make_bar(85)),
-    ("bar_mid.png", make_bar(45)),
-    ("bar_low.png", make_bar(12)),
-    ("bar_offline.png", make_bar(None, "offline")),
+    ("bar_full.png", make_bar(codex_payload(85))),
+    ("bar_mid.png", make_bar(codex_payload(45))),
+    ("bar_low.png", make_bar(codex_payload(12))),
+    ("bar_offline.png", make_bar(codex_payload(None, "offline"))),
+    ("bar_ds.png", make_bar(ds_payload(354.27))),
+    ("bar_ds_low.png", make_bar(ds_payload(3.42))),
+    ("bar_ds_err.png", make_bar(ds_payload(None, "error"))),
 ]
 
 panel = DetailPanel()
-panel.set_data({
-    "plan_type": "plus",
-    "primary": {"used": 70, "remaining": 30, "resets_at": 1791518168},
-    "secondary": {"used": 43, "remaining": 57, "resets_at": 1791950575},
-    "updated_at": 1791514848,
-}, "online")
+panel.set_state(ds_payload(354.27))
 panel.show()
 app.processEvents()
 
 QTimer.singleShot(600, lambda: [snap(p, n) for n, p in bars] or None)
-QTimer.singleShot(700, lambda: snap(panel, "panel.png"))
-QTimer.singleShot(900, app.quit)
+QTimer.singleShot(700, lambda: snap(panel, "panel_ds.png"))
+panel.set_state(codex_payload(70))
+QTimer.singleShot(800, lambda: snap(panel, "panel.png"))
+QTimer.singleShot(1000, app.quit)
 app.exec()

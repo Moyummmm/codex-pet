@@ -18,7 +18,7 @@ from PyQt6.QtGui import (QAction, QBrush, QColor, QFont, QFontMetrics, QPainter,
                          QPainterPath, QPen)
 from PyQt6.QtWidgets import QApplication, QMenu, QWidget
 
-from .colors import fill_color
+from .colors import COL_OFFLINE, deepseek_color, fill_color
 from .config import load_config, save_config
 
 COL_BG = QColor(32, 36, 44, 225)
@@ -89,8 +89,7 @@ class TaskbarBar(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
-        self._data: dict | None = None
-        self._status = "offline"
+        self._payload: dict = {}
         self._remaining: int | None = None
         self._drag_offset: QPoint | None = None
         self._moved = False
@@ -115,9 +114,9 @@ class TaskbarBar(QWidget):
 
     # ------------------------------------------------------------------ 数据
 
-    def set_limits(self, data: dict | None, status: str) -> None:
-        self._data = data
-        self._status = status
+    def set_state(self, payload: dict | None) -> None:
+        """接收统一状态快照(main.compose 生成)。"""
+        self._payload = payload or {}
         self._refresh()
 
     def anchor_global_point(self) -> QPoint:
@@ -129,7 +128,30 @@ class TaskbarBar(QWidget):
 
     def _segments(self) -> list[tuple[str, QColor, bool]]:
         """(文字, 颜色, 是否加粗)。"""
-        if self._status != "online":
+        active = self._payload.get("active", "codex")
+        status = self._payload.get("status", "offline")
+        if active == "deepseek":
+            return self._deepseek_segments(status)
+        return self._codex_segments(status)
+
+    def _deepseek_segments(self, status: str) -> list[tuple[str, QColor, bool]]:
+        ds = self._payload.get("deepseek")
+        if status == "error":
+            return [("DeepSeek 密钥无效", COL_TEXT_DIM, False)]
+        if status != "online":
+            return [("DeepSeek 离线", COL_TEXT_DIM, False)]
+        if not ds or ds.get("total") is None:
+            return [("DeepSeek …", COL_TEXT_DIM, False)]
+        total = ds["total"]
+        sym = {"CNY": "¥", "USD": "$"}.get(ds.get("currency"), "¥")
+        return [("DeepSeek ", COL_TEXT_DIM, False),
+                (f"{sym}{total:,.2f}", deepseek_color(total), True)]
+
+    def _codex_segments(self, status: str) -> list[tuple[str, QColor, bool]]:
+        codex = self._payload.get("codex") or {}
+        primary = codex.get("primary") or {}
+        self._remaining = primary.get("remaining")
+        if status != "online":
             return [("Codex 离线", COL_TEXT_DIM, False)]
         if self._remaining is None:
             return [("Codex …", COL_TEXT_DIM, False)]
@@ -137,13 +159,12 @@ class TaskbarBar(QWidget):
             ("Codex ", COL_TEXT_DIM, False),
             (f"{self._remaining}%", fill_color(self._remaining, False), True),
         ]
-        cd = self._fmt_countdown()
+        cd = self._fmt_countdown(primary.get("resets_at"))
         if cd:
             segs.append((f" · {cd}", COL_TEXT_DIM, False))
         return segs
 
-    def _fmt_countdown(self) -> str:
-        resets_at = (self._data or {}).get("primary", {}).get("resets_at")
+    def _fmt_countdown(self, resets_at) -> str:
         if not resets_at:
             return ""
         secs = max(0, int(resets_at - time.time()))
@@ -171,12 +192,18 @@ class TaskbarBar(QWidget):
         self.update()
 
     def _data_remaining(self) -> None:
-        if self._status == "online" and self._data:
-            self._remaining = self._data.get("primary", {}).get("remaining")
-            self._dot_color = fill_color(self._remaining, False)
+        active = self._payload.get("active", "codex")
+        if active == "deepseek":
+            ds = self._payload.get("deepseek")
+            self._dot_color = (deepseek_color(ds.get("total"))
+                               if ds else COL_OFFLINE)
         else:
-            self._remaining = None
-            self._dot_color = QColor(150, 158, 168)
+            codex = self._payload.get("codex") or {}
+            self._remaining = (codex.get("primary") or {}).get("remaining")
+            online = self._payload.get("status") == "online"
+            self._dot_color = (fill_color(self._remaining, False)
+                               if online and self._remaining is not None
+                               else COL_OFFLINE)
 
     # ------------------------------------------------------------------ 位置
 

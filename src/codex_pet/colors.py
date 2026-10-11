@@ -11,6 +11,18 @@ COL_MID = QColor(255, 178, 66)             # 30–60% 橙
 COL_LOW = QColor(255, 107, 107)            # <30% 红
 COL_OFFLINE = QColor(170, 177, 186)        # 离线灰
 COL_TEXT = QColor(70, 78, 90)
+COL_DEEPSEEK = QColor(77, 163, 255)        # DeepSeek 蓝
+
+
+def deepseek_color(total: float | None) -> QColor:
+    """按余额水平选色:充足蓝,偏低橙,<5 红。"""
+    if total is None:
+        return COL_OFFLINE
+    if total >= 20:
+        return COL_DEEPSEEK
+    if total >= 5:
+        return COL_MID
+    return COL_LOW
 
 
 def fill_color(remaining: int | None, offline: bool) -> QColor:

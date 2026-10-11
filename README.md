@@ -1,23 +1,30 @@
 # Codex Pet ⚡
 
-一个实时显示 **Codex / ChatGPT Plus** 配额余额的 Windows 任务栏小工具。
+一个实时显示 **Codex / ChatGPT Plus** 配额余额的 Windows 任务栏小工具,支持 **DeepSeek API 余额**自动切换。
 
-在任务栏托盘左侧显示一行紧凑文字,如 `● Codex 29% · 2h15m`:
-状态圆点随剩余量变色(绿 → 橙 → 红),倒计时实时跳动,不占用桌面空间。
+在任务栏托盘左侧显示一行紧凑文字,状态圆点随余额变色,不占用桌面空间。
 全屏看视频/玩游戏时自动隐藏(与任务栏自身行为一致),退出全屏自动恢复。
 
-![余额条](shots/bar_mid.png)
+**双模式自动切换**(每 60 秒检测 `~/.codex/config.toml`):
+
+| Codex 当前使用 | 余额条显示 |
+| --- | --- |
+| ChatGPT(默认) | `● Codex 29% · 2h15m`(5 小时窗口剩余配额) |
+| DeepSeek | `● DeepSeek ¥354.27`(官方 API 余额,总/赠/充在详情面板) |
+
+![余额条](shots/bar_mid.png) ![DeepSeek 模式](shots/bar_ds.png)
 
 ## 功能
 
-- **实时余额**:通过官方 `codex app-server` 协议获取,自动跟随推送更新 + 5 分钟兜底轮询
-- **紧凑直观**:状态圆点 + 剩余百分比 + 重置倒计时,一眼可读
-- **详情面板**:点击弹出,显示套餐类型、5 小时/周双窗口进度条与重置倒计时;点击面板以外任何位置或按 Esc 自动收起
+- **实时余额**:通过官方 `codex app-server` 协议获取,自动跟随推送更新 + 5 分钟兜底轮询;DeepSeek 余额走官方 `/user/balance` 接口,2 分钟轮询
+- **自动切换**:检测到 `config.toml` 的 active provider 是 DeepSeek(base_url/name 含 deepseek)即切换显示,密钥支持 `experimental_bearer_token` 字段或 `env_key` 环境变量,切回 ChatGPT 自动恢复
+- **紧凑直观**:状态圆点 + 余额/百分比 + 重置倒计时;DeepSeek 余额 <¥20 橙色、<¥5 红色预警
+- **详情面板**:点击弹出——DeepSeek 总/赠/充余额与 ChatGPT 双窗口进度条;点击面板以外任何位置或按 Esc 自动收起
 - **全屏自动隐藏**:检测到真正的全屏应用(全屏视频/游戏/幻灯片)时隐藏,最大化窗口不受影响;退出全屏恢复
-- **置顶强化**:周期性重申置顶层级,避免被任务栏或其他窗口压住;任务栏挪动/分辨率变化时自动跟随锚定
-- **系统托盘**:迷你电量图标 + 悬停提示,可隐藏/显示余额条
-- **零凭证接触**:不读取 `~/.codex/auth.json`,鉴权完全由 Codex CLI 自己管理
-- **离线兜底**:codex 未安装/未登录时显示离线状态,进程崩溃自动退避重启
+- **置顶强化**:每秒检测是否被其他置顶窗口(如任务栏)盖住,被盖自动重排回顶端;任务栏挪动/分辨率变化时跟随锚定
+- **系统托盘**:模式化图标(配额电量 / DeepSeek ¥)+ 悬停提示
+- **零凭证接触**:ChatGPT 鉴权完全由 Codex CLI 自己管理;DeepSeek 密钥只用于调余额接口,不写日志
+- **离线兜底**:codex 未安装/未登录时显示离线状态,进程崩溃自动退避重启;DeepSeek 密钥无效时明确提示
 
 ## 环境要求
 
@@ -70,7 +77,7 @@ uv run --with pyinstaller pyinstaller --onefile --windowed \
 ## 开发自检脚本
 
 ```bash
-uv run python test_smoke.py    # 端到端冒烟测试(离屏,验证真实数据链路)
+uv run python test_smoke.py    # 端到端冒烟测试(离屏,验证真实数据链路,含 DeepSeek)
 uv run python test_render.py   # 渲染余额条各状态截图到 shots/
 ```
 
@@ -78,10 +85,12 @@ uv run python test_render.py   # 渲染余额条各状态截图到 shots/
 
 ```
 src/codex_pet/
-├── __main__.py      # 入口:装配各组件
+├── __main__.py      # 入口:装配各组件、提供方自动切换
 ├── codex_client.py  # codex app-server JSONL 客户端(QProcess + JSON-RPC 2.0)
+├── deepseek_client.py # DeepSeek 官方 /user/balance 客户端(QNetworkAccessManager)
+├── provider.py      # 解析 ~/.codex/config.toml 检测当前提供方
 ├── taskbar_bar.py   # 任务栏余额条(Win32 任务栏/托盘探测 + 全屏检测 + 置顶强化)
-├── detail_panel.py  # 点击弹出的配额详情浮层(点击外部自动收起)
+├── detail_panel.py  # 点击弹出的详情浮层(DeepSeek 余额 + 双窗口配额)
 ├── tray.py          # 系统托盘
 ├── colors.py        # 共享配色
 └── config.py        # 配置读写(~/.codex-pet/config.json)

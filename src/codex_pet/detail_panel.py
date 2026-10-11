@@ -11,7 +11,7 @@ from PyQt6.QtGui import QColor, QCursor
 from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton,
                              QProgressBar, QVBoxLayout, QWidget)
 
-from .colors import fill_color
+from .colors import deepseek_color, fill_color
 
 PLAN_NAMES = {
     "plus": "ChatGPT Plus",
@@ -109,7 +109,7 @@ class DetailPanel(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
 
-        self._data: dict | None = None
+        self._payload: dict = {}
         self._keep_rects: list[QRect] = []  # 点击这些区域内不关闭(面板自身 + 余额条)
         self._prev_held = False             # 上次轮询时鼠标按住状态(用于按下沿检测)
         self._timer = QTimer(self)
@@ -140,6 +140,28 @@ class DetailPanel(QWidget):
         title.addWidget(self.refresh_btn)
         root.addLayout(title)
 
+        # ---- DeepSeek 余额分组(active 为 deepseek 时显示在最上) ----
+        self.ds_group = QWidget(card)
+        ds_layout = QVBoxLayout(self.ds_group)
+        ds_layout.setContentsMargins(0, 0, 0, 0)
+        ds_layout.setSpacing(4)
+        self.ds_title = QLabel("DeepSeek API")
+        self.ds_title.setStyleSheet("font-weight: bold; color: #4da3ff;")
+        ds_layout.addWidget(self.ds_title)
+        self.ds_rows = QLabel("")
+        self.ds_rows.setTextFormat(Qt.TextFormat.RichText)
+        self.ds_rows.setStyleSheet("color: #444; font-size: 13px;")
+        ds_layout.addWidget(self.ds_rows)
+        self.ds_note = QLabel("")
+        self.ds_note.setStyleSheet("color: #8a94a3; font-size: 11px;")
+        ds_layout.addWidget(self.ds_note)
+        root.addWidget(self.ds_group)
+
+        # ---- ChatGPT Plus 配额分组 ----
+        self.codex_header = QLabel("ChatGPT Plus 配额")
+        self.codex_header.setStyleSheet("font-weight: bold; color: #444; font-size: 12px;")
+        root.addWidget(self.codex_header)
+
         self.primary_row = _LimitRow("5 小时窗口", card)
         root.addWidget(self.primary_row)
         self.secondary_row = _LimitRow("周窗口", card)
@@ -154,27 +176,70 @@ class DetailPanel(QWidget):
         outer.addWidget(card)
         self.adjustSize()
 
-    def set_data(self, data: dict | None, status: str) -> None:
-        self._data = data
+    def set_state(self, payload: dict | None) -> None:
+        """接收统一状态快照(main.compose 生成)。"""
+        self._payload = payload or {}
         self._refresh_labels()
 
     def _refresh_labels(self) -> None:
-        data = self._data
-        if not data:
-            self.plan_label.setText("Codex 配额(离线)")
+        p = self._payload
+        active = p.get("active", "codex")
+        codex = p.get("codex")
+        ds = p.get("deepseek")
+
+        # DeepSeek 分组
+        if active == "deepseek" or ds is not None:
+            self.ds_group.setVisible(True)
+            self._update_deepseek(ds, p.get("ds_status", "offline"),
+                                  active == "deepseek", p.get("model"))
+        else:
+            self.ds_group.setVisible(False)
+
+        # Codex 分组
+        if codex:
+            plan = codex.get("plan_type")
+            self.plan_label.setText(f"ChatGPT Plus 配额 · {PLAN_NAMES.get(plan, plan or '?')}")
+            self.primary_row.update_data(codex.get("primary"))
+            self.secondary_row.update_data(codex.get("secondary"))
+            updated_at = codex.get("updated_at")
+            if updated_at:
+                t = time.strftime("%H:%M:%S", time.localtime(updated_at))
+                self.updated_label.setText(f"更新于 {t}")
+            else:
+                self.updated_label.setText("")
+        else:
+            self.plan_label.setText("ChatGPT Plus 配额(离线)")
             self.primary_row.update_data(None)
             self.secondary_row.update_data(None)
             self.updated_label.setText("等待数据…")
+        self.adjustSize()
+
+    def _update_deepseek(self, ds: dict | None, status: str,
+                         is_active: bool, model: str | None = None) -> None:
+        if status == "error":
+            self.ds_rows.setText('<span style="color:#e06c6c;">API 密钥无效或无权限</span>')
+            self.ds_note.setText("")
             return
-        plan = data.get("plan_type")
-        self.plan_label.setText(f"Codex 配额 · {PLAN_NAMES.get(plan, plan or '?')}")
-        self.primary_row.update_data(data.get("primary"))
-        self.secondary_row.update_data(data.get("secondary"))
-        updated_at = data.get("updated_at")
+        if status != "online" or not ds:
+            self.ds_rows.setText('<span style="color:#8a94a3;">读取中…</span>')
+            self.ds_note.setText("")
+            return
+        sym = {"CNY": "¥", "USD": "$"}.get(ds.get("currency"), "¥")
+        total = ds.get("total")
+        color = deepseek_color(total).name()
+        note = "当前 Codex 正在使用 DeepSeek" if is_active else ""
+        if model:
+            note += f" · {model}" if note else model
+        self.ds_rows.setText(
+            f"总余额 <b style='color:{color};'>{sym}{total:,.2f}</b>"
+            f" &nbsp;·&nbsp; 赠送 {sym}{ds.get('granted', 0):,.2f}"
+            f" &nbsp;·&nbsp; 充值 {sym}{ds.get('topped_up', 0):,.2f}"
+        )
+        updated_at = ds.get("updated_at")
         if updated_at:
             t = time.strftime("%H:%M:%S", time.localtime(updated_at))
-            self.updated_label.setText(f"更新于 {t}")
-        self.adjustSize()
+            note = (note + " · " if note else "") + f"更新于 {t}"
+        self.ds_note.setText(note)
 
     def popup_near(self, anchor_global_pos, screen_rect,
                    keep_rects: list[QRect] | None = None) -> None:

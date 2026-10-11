@@ -7,18 +7,31 @@ from PyQt6.QtGui import (QAction, QColor, QFont, QIcon, QPainter, QPen,
                          QPixmap)
 from PyQt6.QtWidgets import QMenu, QSystemTrayIcon
 
-from .colors import fill_color
+from .colors import deepseek_color, fill_color
 
 
-def make_tray_icon(remaining: int | None, status: str) -> QIcon:
-    """画一个 64x64 的迷你电量胶囊图标。"""
+def make_tray_icon(remaining: int | None, status: str,
+                   provider: str = "codex", ds_total: float | None = None) -> QIcon:
+    """画一个 64x64 的迷你图标:配额电量胶囊 / DeepSeek ¥ 圆标。"""
     pixmap = QPixmap(64, 64)
     pixmap.fill(Qt.GlobalColor.transparent)
     p = QPainter(pixmap)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-    body = QRectF(10, 8, 44, 48)
     offline = status != "online"
+
+    if provider == "deepseek":
+        color = deepseek_color(ds_total) if not offline else QColor(170, 177, 186)
+        p.setPen(QPen(color, 5))
+        p.setBrush(QColor(232, 238, 244) if not offline else QColor(225, 228, 232))
+        p.drawEllipse(QRectF(8, 8, 48, 48))
+        p.setPen(QColor(50, 55, 65) if not offline else QColor(120, 126, 136))
+        p.setFont(QFont("Segoe UI", 22, QFont.Weight.Bold))
+        p.drawText(QRectF(8, 8, 48, 48), Qt.AlignmentFlag.AlignCenter, "¥")
+        p.end()
+        return QIcon(pixmap)
+
+    body = QRectF(10, 8, 44, 48)
     color = fill_color(remaining, offline)
 
     p.setPen(QPen(QColor(120, 130, 145), 3))
@@ -53,8 +66,6 @@ class Tray(QObject):
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
-        self._remaining: int | None = None
-        self._status = "offline"
 
         self.icon = QSystemTrayIcon(self)
         self.icon.setToolTip("Codex Pet")
@@ -81,8 +92,26 @@ class Tray(QObject):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
             self.toggleBarRequested.emit()
 
-    def update_state(self, remaining: int | None, status: str) -> None:
-        self._remaining, self._status = remaining, status
+    def update_payload(self, payload: dict) -> None:
+        """根据统一状态快照更新图标与提示。"""
+        active = payload.get("active", "codex")
+        status = payload.get("status", "offline")
+        if active == "deepseek":
+            ds = payload.get("deepseek")
+            total = ds.get("total") if ds else None
+            self.icon.setIcon(make_tray_icon(None, status, "deepseek", total))
+            if status == "error":
+                tip = "DeepSeek(密钥无效)"
+            elif status != "online" or total is None:
+                tip = "DeepSeek(读取中…)"
+            else:
+                sym = {"CNY": "¥", "USD": "$"}.get((ds or {}).get("currency"), "¥")
+                tip = f"DeepSeek 余额 {sym}{total:,.2f}"
+            self.icon.setToolTip(tip)
+            return
+
+        codex = payload.get("codex") or {}
+        remaining = (codex.get("primary") or {}).get("remaining")
         self.icon.setIcon(make_tray_icon(remaining, status))
         if status != "online":
             tip = "Codex 余额条(离线)"
