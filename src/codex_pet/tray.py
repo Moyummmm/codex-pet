@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import sys
+
 from PyQt6.QtCore import QObject, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import (QAction, QColor, QIcon, QPainter, QPen,
+from PyQt6.QtGui import (QAction, QColor, QCursor, QIcon, QPainter, QPen,
                          QPixmap)
 from PyQt6.QtWidgets import QMenu, QSystemTrayIcon
 
@@ -70,27 +72,36 @@ class Tray(QObject):
         self.icon = QSystemTrayIcon(self)
         self.icon.setToolTip("Codex Pet")
 
-        menu = QMenu()
-        self.toggle_action = QAction("隐藏余额条", menu)
+        self._menu = QMenu()
+        self.toggle_action = QAction("隐藏余额条", self._menu)
         self.toggle_action.triggered.connect(self.toggleBarRequested.emit)
-        menu.addAction(self.toggle_action)
+        self._menu.addAction(self.toggle_action)
 
-        refresh = QAction("立即刷新", menu)
+        refresh = QAction("立即刷新", self._menu)
         refresh.triggered.connect(self.refreshRequested.emit)
-        menu.addAction(refresh)
+        self._menu.addAction(refresh)
 
-        menu.addSeparator()
-        quit_action = QAction("退出", menu)
+        self._menu.addSeparator()
+        quit_action = QAction("退出", self._menu)
         quit_action.triggered.connect(self.quitRequested.emit)
-        menu.addAction(quit_action)
+        self._menu.addAction(quit_action)
 
-        self.icon.setContextMenu(menu)
         self.icon.activated.connect(self._on_activated)
+        if sys.platform == "darwin":
+            # macOS 14+/26+:点击状态项弹原生菜单会在 Qt 菜单追踪通知观察者里
+            # 对不支持 clickCount 的事件调用 clickCount,ObjC 断言直接 abort。
+            # 不给状态项挂原生菜单,改为激活时手动弹出(见 _on_activated)。
+            pass
+        else:
+            self.icon.setContextMenu(self._menu)
         self.icon.show()
 
     def _on_activated(self, reason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
             self.toggleBarRequested.emit()
+        elif reason == QSystemTrayIcon.ActivationReason.Context:
+            # 仅非 macOS 走到这(macOS 原生菜单路径已移除);兜底手动弹出
+            self._menu.popup(QCursor.pos())
 
     def update_payload(self, payload: dict) -> None:
         """根据统一状态快照更新图标与提示。"""
