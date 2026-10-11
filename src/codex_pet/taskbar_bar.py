@@ -18,8 +18,8 @@ from PyQt6.QtGui import (QAction, QBrush, QColor, QFont, QFontMetrics, QPainter,
                          QPainterPath, QPen)
 from PyQt6.QtWidgets import QApplication, QMenu, QWidget
 
+from .colors import fill_color
 from .config import load_config, save_config
-from .pet_widget import fill_color
 
 COL_BG = QColor(32, 36, 44, 225)
 COL_BORDER = QColor(255, 255, 255, 40)
@@ -59,6 +59,7 @@ class TaskbarBar(QWidget):
     """任务栏上的迷你状态条。left-click 切换详情;拖拽可微调位置。"""
 
     clicked = pyqtSignal()
+    autoHidden = pyqtSignal()  # 因全屏应用而自动隐藏时发射
 
     HEIGHT = 24
     PAD_X = 9
@@ -195,6 +196,13 @@ class TaskbarBar(QWidget):
             pos = QPoint(base.x() + int(offset[0]), base.y() + int(offset[1]))
         else:
             pos = base
+        # 钳制在屏幕内(用完整几何而非工作区:条合法地驻留在任务栏上),
+        # 防止探测异常时把条定位到屏幕外
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is not None:
+            geo = screen.geometry()
+            pos.setX(max(geo.left(), min(pos.x(), geo.right() - self.width() + 1)))
+            pos.setY(max(geo.top(), min(pos.y(), geo.bottom() - self.height() + 1)))
         if pos != self.pos():
             self.move(pos)
 
@@ -207,6 +215,7 @@ class TaskbarBar(QWidget):
         if self._fullscreen_app_active():
             if self.isVisible():
                 self.hide()
+                self.autoHidden.emit()
             return
         if not self.isVisible():
             self.show()
@@ -234,7 +243,12 @@ class TaskbarBar(QWidget):
             pass
 
     def _fullscreen_app_active(self) -> bool:
-        """前台窗口是否全屏覆盖整块屏幕(视频/游戏)→ 此时应隐藏。"""
+        """前台窗口是否为真正的全屏应用(视频/游戏)→ 此时应隐藏。
+
+        关键:最大化的窗口同样覆盖整块屏幕,但它带有 WS_CAPTION 标题栏样式;
+        真正的全屏(全屏视频、游戏、幻灯片)是无标题栏的。仅当
+        覆盖整屏 且 无标题栏 且 与余额条在同一块屏幕 时才算全屏。
+        """
         if sys.platform != "win32":
             return False
         try:
@@ -247,6 +261,11 @@ class TaskbarBar(QWidget):
             if cls.value in ("Shell_TrayWnd", "Progman", "WorkerW",
                              "Shell_SecondaryTrayWnd"):
                 return False
+            # 带标题栏的窗口(普通最大化窗口)不算全屏
+            GWL_STYLE = -16
+            WS_CAPTION = 0x00C00000
+            if user32.GetWindowLongW(hwnd, GWL_STYLE) & WS_CAPTION:
+                return False
             r = _RECT()
             if not user32.GetWindowRect(hwnd, ctypes.byref(r)):
                 return False
@@ -257,8 +276,16 @@ class TaskbarBar(QWidget):
             sx1, sy1 = int((geo.left() + geo.width()) * dpr), \
                        int((geo.top() + geo.height()) * dpr)
             tol = 4
-            return (r.left <= sx0 + tol and r.top <= sy0 + tol
-                    and r.right >= sx1 - tol and r.bottom >= sy1 - tol)
+            covered = (r.left <= sx0 + tol and r.top <= sy0 + tol
+                       and r.right >= sx1 - tol and r.bottom >= sy1 - tol)
+            if not covered:
+                return False
+            # 还需与余额条同一块屏幕(MonitorFromWindow)
+            MONITOR_DEFAULTTONEAREST = 2
+            bar_hwnd = int(self.winId())
+            bar_mon = user32.MonitorFromWindow(bar_hwnd, MONITOR_DEFAULTTONEAREST)
+            fg_mon = user32.MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)
+            return bar_mon == fg_mon
         except Exception:
             return False
 

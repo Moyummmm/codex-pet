@@ -7,7 +7,7 @@ from PyQt6.QtGui import (QAction, QColor, QFont, QIcon, QPainter, QPen,
                          QPixmap)
 from PyQt6.QtWidgets import QMenu, QSystemTrayIcon
 
-from .pet_widget import fill_color
+from .colors import fill_color
 
 
 def make_tray_icon(remaining: int | None, status: str) -> QIcon:
@@ -48,8 +48,7 @@ def make_tray_icon(remaining: int | None, status: str) -> QIcon:
 
 class Tray(QObject):
     refreshRequested = pyqtSignal()
-    togglePetRequested = pyqtSignal()
-    switchModeRequested = pyqtSignal()
+    toggleBarRequested = pyqtSignal()
     quitRequested = pyqtSignal()
 
     def __init__(self, parent: QObject | None = None) -> None:
@@ -61,13 +60,9 @@ class Tray(QObject):
         self.icon.setToolTip("Codex Pet")
 
         menu = QMenu()
-        self.toggle_action = QAction("隐藏宠物", menu)
-        self.toggle_action.triggered.connect(self.togglePetRequested.emit)
+        self.toggle_action = QAction("隐藏余额条", menu)
+        self.toggle_action.triggered.connect(self.toggleBarRequested.emit)
         menu.addAction(self.toggle_action)
-
-        self.mode_action = QAction("切换为任务栏文字", menu)
-        self.mode_action.triggered.connect(self.switchModeRequested.emit)
-        menu.addAction(self.mode_action)
 
         refresh = QAction("立即刷新", menu)
         refresh.triggered.connect(self.refreshRequested.emit)
@@ -84,25 +79,18 @@ class Tray(QObject):
 
     def _on_activated(self, reason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
-            self.togglePetRequested.emit()
+            self.toggleBarRequested.emit()
 
     def update_state(self, remaining: int | None, status: str) -> None:
         self._remaining, self._status = remaining, status
         self.icon.setIcon(make_tray_icon(remaining, status))
         if status != "online":
-            tip = "Codex Pet(离线)"
+            tip = "Codex 余额条(离线)"
         elif remaining is None:
-            tip = "Codex Pet(读取中…)"
+            tip = "Codex 余额条(读取中…)"
         else:
             tip = f"Codex 剩余 {remaining}%"
         self.icon.setToolTip(tip)
 
-    def set_pet_visible(self, visible: bool, mode: str = "pet") -> None:
-        name = "宠物" if mode == "pet" else "状态条"
-        self.toggle_action.setText(("隐藏" if visible else "显示") + name)
-
-    def set_mode(self, mode: str) -> None:
-        """根据当前模式更新"切换"菜单项文案。"""
-        self.mode_action.setText(
-            "切换为任务栏文字" if mode == "pet" else "切换为桌面宠物"
-        )
+    def set_bar_visible(self, visible: bool) -> None:
+        self.toggle_action.setText("隐藏余额条" if visible else "显示余额条")

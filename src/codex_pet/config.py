@@ -1,4 +1,4 @@
-"""配置读写:显示模式、窗口/状态条位置等,存于 ~/.codex-pet/config.json。"""
+"""配置读写:余额条位置偏移等,存于 ~/.codex-pet/config.json。"""
 
 from __future__ import annotations
 

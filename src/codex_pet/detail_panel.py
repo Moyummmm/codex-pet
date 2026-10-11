@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import time
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import QRect, Qt, QTimer
 from PyQt6.QtGui import QColor, QFont
-from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton,
-                             QProgressBar, QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel,
+                             QPushButton, QProgressBar, QVBoxLayout, QWidget)
 
-from .pet_widget import fill_color
+from .colors import fill_color
 
 PLAN_NAMES = {
     "plus": "ChatGPT Plus",
@@ -108,6 +108,8 @@ class DetailPanel(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
 
         self._data: dict | None = None
+        self._filter_installed = False
+        self._keep_rects: list[QRect] = []  # 点击这些区域内不关闭(面板自身 + 余额条)
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh_labels)
 
@@ -168,9 +170,14 @@ class DetailPanel(QWidget):
             self.updated_label.setText(f"更新于 {t}")
         self.adjustSize()
 
-    def popup_near(self, anchor_global_pos, screen_rect) -> None:
-        """在宠物旁边弹出;超出屏幕则换边。"""
+    def popup_near(self, anchor_global_pos, screen_rect,
+                   keep_rects: list[QRect] | None = None) -> None:
+        """在宠物旁边弹出;超出屏幕则换边。
+
+        keep_rects:除面板自身外,点击这些区域(如余额条)也不触发关闭。
+        """
         self._refresh_labels()
+        self._keep_rects = list(keep_rects or [])
         w, h = self.width(), self.height()
         x = anchor_global_pos.x() - w - 12
         if x < screen_rect.left():
@@ -180,8 +187,28 @@ class DetailPanel(QWidget):
         self.move(x, y)
         self.show()
         self.raise_()
+        if not self._filter_installed:
+            QApplication.instance().installEventFilter(self)
+            self._filter_installed = True
         self._timer.start(1000)  # 倒计时每秒刷新
 
     def hide_panel(self) -> None:
         self._timer.stop()
         self.hide()
+        if self._filter_installed:
+            QApplication.instance().removeEventFilter(self)
+            self._filter_installed = False
+
+    def eventFilter(self, obj, event) -> bool:
+        """点击面板与余额条以外的任何位置 → 自动收起;Esc → 收起。"""
+        et = event.type()
+        if et == event.Type.MouseButtonPress:
+            gp = event.globalPosition().toPoint()
+            inside = self.geometry().contains(gp) or any(
+                r.contains(gp) for r in self._keep_rects)
+            if not inside:
+                self.hide_panel()
+        elif et == event.Type.KeyPress:
+            if event.key() == Qt.Key.Key_Escape:
+                self.hide_panel()
+        return False
