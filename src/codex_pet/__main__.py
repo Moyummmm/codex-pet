@@ -131,6 +131,7 @@ def main() -> int:
             panel.hide_panel()
 
     def on_refresh_all() -> None:
+        panel.begin_refresh()   # 按钮"刷新中… → ✓ 已刷新/未收到新数据"反馈
         codex_client.refresh()
         if state["ds_configured"]:
             ds_client.refresh()
