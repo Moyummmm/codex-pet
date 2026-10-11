@@ -1,7 +1,7 @@
 """共享胶囊条基类:文案、测量、绘制与交互,平台子类只实现定位与维护。
 
-Windows 子类(taskbar_bar)锚定 Win32 任务栏托盘;macOS 子类(macos_bar)
-锚定菜单栏右上角下方。
+当前仅 Windows 子类(taskbar_bar),锚定 Win32 任务栏托盘;
+macOS 走菜单栏电池图标(见 tray.py),不使用悬浮条。
 """
 
 from __future__ import annotations

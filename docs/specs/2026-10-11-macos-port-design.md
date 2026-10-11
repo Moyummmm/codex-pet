@@ -88,3 +88,21 @@ src/codex_pet/
 - CGWindowList 全屏判定对"自动隐藏菜单栏 + 满窗窗口"存在误报可能,阈值兜底,
   误报后果仅为条临时隐藏,可接受。
 - Gatekeeper:未公证 app 首次打开需右键 → 打开,release notes 写明。
+
+## v1.4 修订(2026-10-12,真机反馈后)
+
+悬浮胶囊条方案在真机上被否:太小、易误触隐藏(托盘左键=切换条显示)。
+macOS 显示层重设计:
+
+- **删除 macos_bar / bar,悬浮条方案整体下线**;macos_native 只保留
+  `mouse_button_state`(详情面板点外收起)。
+- 主显示改为**菜单栏状态项电池图标**(tray.py,剩余额度数字嵌在电池内,
+  离线 Z / DeepSeek ¥),常驻不消失——对齐系统电池的使用习惯。
+- 左键状态项 → 详情面板弹出在菜单栏下沿(锚点取状态项几何,失败回退
+  鼠标位置);右键手动弹菜单(仍不挂原生菜单,规避 clickCount 断言崩溃,
+  见 v1.3.0 修复)。
+- `__main__` 平台化装配:Windows 路径行为不变;macOS 无 bar 分支。
+
+修复记录:v1.3.0 期间发现并修复 (1) codex CLI npm 包缺原生二进制导致
+始终离线(环境问题,重装修复);(2) 托盘原生菜单 → NSMenuTrackingSession
+→ Qt 观察者 clickCount 断言 → SIGABRT(4 份同签名崩溃报告)。

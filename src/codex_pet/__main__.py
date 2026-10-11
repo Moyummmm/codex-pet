@@ -1,4 +1,7 @@
-"""Codex Pet 入口:装配数据客户端、任务栏余额条、详情面板与托盘。
+"""Codex Pet 入口:装配数据客户端、显示组件与托盘/菜单栏。
+
+macOS:菜单栏电池图标即主显示,左键弹出详情面板,无悬浮条。
+Windows:任务栏悬浮余额条 + 托盘辅助。
 
 自动检测 Codex 当前使用的提供方(读 ~/.codex/config.toml,每 60 秒):
 - ChatGPT(默认)→ 显示 5 小时/周配额
@@ -13,12 +16,13 @@ import sys
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
-from .bar import TaskbarBar
 from .codex_client import CodexClient
 from .deepseek_client import DeepSeekClient
 from .detail_panel import DetailPanel
 from .provider import detect_provider
 from .tray import Tray
+
+IS_MAC = sys.platform == "darwin"
 
 PROVIDER_CHECK_MS = 60 * 1000
 
@@ -33,9 +37,13 @@ def main() -> int:
 
     codex_client = CodexClient()
     ds_client = DeepSeekClient()
-    bar = TaskbarBar()
     panel = DetailPanel()
     tray = Tray()
+
+    bar = None
+    if not IS_MAC:
+        from .taskbar_bar import TaskbarBar
+        bar = TaskbarBar()
 
     state: dict = {
         "active": "codex",       # "codex" | "deepseek"
@@ -64,7 +72,8 @@ def main() -> int:
 
     def push() -> None:
         payload = compose()
-        bar.set_state(payload)
+        if bar is not None:
+            bar.set_state(payload)
         panel.set_state(payload)
         tray.update_payload(payload)
 
@@ -87,6 +96,17 @@ def main() -> int:
     def on_ds_status(status: str) -> None:
         state["ds_status"] = status
         push()
+
+    def on_show_panel() -> None:
+        """macOS:点击菜单栏图标弹出/收起详情面板。"""
+        if panel.isVisible():
+            panel.hide_panel()
+            return
+        anchor = tray.anchor_point()
+        screen = app.screenAt(anchor) or app.primaryScreen()
+        avail = screen.availableGeometry()
+        anchor.setY(max(anchor.y(), avail.top()))  # 面板从菜单栏下沿开始
+        panel.popup_near(anchor, avail, [])
 
     def on_bar_clicked() -> None:
         if panel.isVisible():
@@ -117,7 +137,8 @@ def main() -> int:
 
     def on_quit() -> None:
         panel.hide_panel()
-        bar.close()
+        if bar is not None:
+            bar.close()
         app.quit()
 
     # ------------------------------------------------------------------ 切换
@@ -150,13 +171,17 @@ def main() -> int:
     codex_client.statusChanged.connect(on_codex_status)
     ds_client.balanceUpdated.connect(on_ds_balance)
     ds_client.statusChanged.connect(on_ds_status)
-    bar.clicked.connect(on_bar_clicked)
-    bar.autoHidden.connect(on_bar_auto_hidden)
-    bar.on_refresh = on_refresh_all
     panel.refresh_btn.clicked.connect(on_refresh_all)
 
+    if bar is not None:
+        bar.clicked.connect(on_bar_clicked)
+        bar.autoHidden.connect(on_bar_auto_hidden)
+        bar.on_refresh = on_refresh_all
+        tray.toggleBarRequested.connect(on_toggle_bar)
+    else:
+        tray.showPanelRequested.connect(on_show_panel)
+
     tray.refreshRequested.connect(on_refresh_all)
-    tray.toggleBarRequested.connect(on_toggle_bar)
     tray.quitRequested.connect(on_quit)
     tray.update_payload(compose())
 
@@ -164,7 +189,8 @@ def main() -> int:
     provider_timer.setInterval(PROVIDER_CHECK_MS)
     provider_timer.timeout.connect(check_provider)
 
-    bar.show()
+    if bar is not None:
+        bar.show()
     check_provider()          # 先检测提供方(可能直接进入 DeepSeek 模式)
     provider_timer.start()
     codex_client.start()      # ChatGPT 配额常驻获取(详情面板展示)
