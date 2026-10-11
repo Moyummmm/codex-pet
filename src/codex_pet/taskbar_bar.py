@@ -94,21 +94,31 @@ class TaskbarBar(QWidget):
         self._drag_offset: QPoint | None = None
         self._moved = False
         self._user_hidden = False
+        # 任务栏锚定稳定性:矩形连续两次采样一致且完全在屏内才重新锚定
+        self._raw_key = None
+        self._stable_count = 0
+        self._applied_key = None
+        self._stable_base: QPoint | None = None
 
         self._font = QFont("Segoe UI", 9)
         self._font_bold = QFont("Segoe UI", 9, QFont.Weight.Bold)
         self._dot_color = QColor(150, 158, 168)
 
-        # 每秒刷新倒计时;每 2 秒重锚位置/保持置顶/检测全屏
+        # 倒计时文字每秒刷新;全屏检测/锚定 1 秒;被盖检测 250ms
         self._tick_timer = QTimer(self)
         self._tick_timer.setInterval(1000)
         self._tick_timer.timeout.connect(self._refresh)
         self._tick_timer.start()
 
-        self._anchor_timer = QTimer(self)
-        self._anchor_timer.setInterval(1000)
-        self._anchor_timer.timeout.connect(self._maintain)
-        self._anchor_timer.start()
+        self._maintain_timer = QTimer(self)
+        self._maintain_timer.setInterval(1000)
+        self._maintain_timer.timeout.connect(self._maintain)
+        self._maintain_timer.start()
+
+        self._fast_timer = QTimer(self)
+        self._fast_timer.setInterval(250)
+        self._fast_timer.timeout.connect(self._reassert_topmost)
+        self._fast_timer.start()
 
         self._refresh()
 
@@ -207,48 +217,97 @@ class TaskbarBar(QWidget):
 
     # ------------------------------------------------------------------ 位置
 
-    def _default_pos(self) -> QPoint:
-        """任务栏托盘左侧;探测失败则工作区右下角(任务栏正上方)。"""
+    def _compute_base(self) -> QPoint:
+        """按当前任务栏探测结果计算锚点(条右缘贴托盘左侧)。
+
+        任务栏正在动画/滑出屏幕(自动隐藏)时矩形不可靠,回退到整屏右下角。
+        """
         screen = self.screen() or QApplication.primaryScreen()
-        avail = screen.availableGeometry()
+        geo = screen.geometry()
         info = _taskbar_rects()
         if info is not None:
             (tb_l, tb_t, tb_r, tb_b), tray_left = info
             dpr = screen.devicePixelRatio() or 1.0
             tray_left_l = int(tray_left / dpr)
-            tb_t_l, tb_b_l = int(tb_t / dpr), int(tb_b / dpr)
-            geo = screen.geometry()
-            # 合理性检查:任务栏顶部需在屏幕内(排除自动隐藏滑出屏幕的情况)
-            if tb_t_l < tb_b_l and geo.top() <= tb_t_l < geo.bottom():
-                x = tray_left_l - self.width() - 10
-                y = (tb_t_l + tb_b_l - self.height()) // 2
-                return QPoint(x, y)
-        # 回退:工作区右下角
-        return QPoint(avail.right() - self.width() - 12,
-                      avail.bottom() - self.height() - 12)
+            tl, tt = int(tb_l / dpr), int(tb_t / dpr)
+            tr, tb = int(tb_r / dpr), int(tb_b / dpr)
+            # 只接受完全在屏内的停靠矩形(动画帧/隐藏态不满足)
+            if (tb > tb_t and geo.left() - 2 <= tl and geo.top() - 2 <= tt
+                    and tr <= geo.right() + 2 and tb <= geo.bottom() + 2):
+                return QPoint(tray_left_l - self.width() - 10,
+                              (tt + tb - self.height()) // 2)
+        # 回退:整屏右下角(不用 availableGeometry——它随任务栏显隐变化)
+        return QPoint(geo.right() - self.width() - 12,
+                      geo.bottom() - self.height() - 12)
 
-    def _apply_position(self) -> None:
-        base = self._default_pos()
+    def _positioned(self, base: QPoint) -> QPoint:
+        """锚点 + 用户偏移,并钳制在整屏内。"""
         cfg = load_config()
         offset = cfg.get("bar_offset")
         if isinstance(offset, list) and len(offset) == 2:
             pos = QPoint(base.x() + int(offset[0]), base.y() + int(offset[1]))
         else:
-            pos = base
-        # 钳制在屏幕内(用完整几何而非工作区:条合法地驻留在任务栏上),
-        # 防止探测异常时把条定位到屏幕外
+            pos = QPoint(base)
         screen = self.screen() or QApplication.primaryScreen()
         if screen is not None:
             geo = screen.geometry()
             pos.setX(max(geo.left(), min(pos.x(), geo.right() - self.width() + 1)))
             pos.setY(max(geo.top(), min(pos.y(), geo.bottom() - self.height() + 1)))
+        return pos
+
+    def _apply_position(self) -> None:
+        pos = self._positioned(self._compute_base())
+        if pos != self.pos():
+            self.move(pos)
+
+    def _update_anchor(self) -> None:
+        """稳定锚定:任务栏矩形连续两次采样一致且完全在屏内才重定位。
+
+        自动隐藏任务栏的滑入/滑出动画会让矩形每帧都变——期间保持不动,
+        彻底避免余额条跟着任务栏动画上下蹦。
+        """
+        if self._drag_offset is not None:  # 拖拽中不抢位置
+            return
+        info = _taskbar_rects()
+        key = None
+        base = None
+        if info is not None:
+            (tb_l, tb_t, tb_r, tb_b), tray_left = info
+            screen = self.screen() or QApplication.primaryScreen()
+            geo = screen.geometry()
+            dpr = screen.devicePixelRatio() or 1.0
+            tl, tt = int(tb_l / dpr), int(tb_t / dpr)
+            tr, tb = int(tb_r / dpr), int(tb_b / dpr)
+            tray_left_l = int(tray_left / dpr)
+            if (tb > tb_t and geo.left() - 2 <= tl and geo.top() - 2 <= tt
+                    and tr <= geo.right() + 2 and tb <= geo.bottom() + 2):
+                key = (tl, tt, tr, tb, tray_left_l)
+                base = QPoint(tray_left_l - self.width() - 10,
+                              (tt + tb - self.height()) // 2)
+        if key is None:
+            # 任务栏隐藏/动画中:保持现状,重置稳定性计数
+            self._raw_key = None
+            self._stable_count = 0
+            return
+        if key != self._raw_key:
+            self._raw_key = key
+            self._stable_count = 1
+            return
+        self._stable_count += 1
+        if self._stable_count < 2:
+            return
+        if self._applied_key == key:
+            return
+        self._applied_key = key
+        self._stable_base = QPoint(base)
+        pos = self._positioned(base)
         if pos != self.pos():
             self.move(pos)
 
     # ------------------------------------------------------------ 置顶/全屏
 
     def _maintain(self) -> None:
-        """周期维护:位置跟随、置顶层级、全屏应用时自动隐藏。"""
+        """周期维护:全屏应用时自动隐藏 + 稳定锚定(位置不在每秒循环里动)。"""
         if self._user_hidden:
             return
         if self._fullscreen_app_active():
@@ -258,8 +317,7 @@ class TaskbarBar(QWidget):
             return
         if not self.isVisible():
             self.show()
-        self._apply_position()
-        self._reassert_topmost()
+        self._update_anchor()
 
     def set_user_hidden(self, hidden: bool) -> None:
         """用户主动隐藏时,暂停自动显示。"""
@@ -407,8 +465,8 @@ class TaskbarBar(QWidget):
         if event.button() == Qt.MouseButton.LeftButton and self._drag_offset is not None:
             self._drag_offset = None
             if self._moved:
-                # 保存相对默认锚点的偏移
-                base = self._default_pos()
+                # 保存相对稳定锚点的偏移(锚点由 _update_anchor 确认,拖拽期间不被跟随)
+                base = self._stable_base or self._compute_base()
                 cfg = load_config()
                 cfg["bar_offset"] = [self.x() - base.x(), self.y() - base.y()]
                 save_config(cfg)
