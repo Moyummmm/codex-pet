@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import ctypes
+import sys
 import time
 
 from PyQt6.QtCore import QRect, Qt, QTimer
-from PyQt6.QtGui import QColor, QFont
-from PyQt6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel,
-                             QPushButton, QProgressBar, QVBoxLayout, QWidget)
+from PyQt6.QtGui import QColor, QCursor
+from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton,
+                             QProgressBar, QVBoxLayout, QWidget)
 
 from .colors import fill_color
 
@@ -108,10 +110,14 @@ class DetailPanel(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
 
         self._data: dict | None = None
-        self._filter_installed = False
         self._keep_rects: list[QRect] = []  # 点击这些区域内不关闭(面板自身 + 余额条)
+        self._prev_held = False             # 上次轮询时鼠标按住状态(用于按下沿检测)
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh_labels)
+        # 全局鼠标轮询:点击本进程以外的窗口(任务栏/其他应用)时也能收到
+        self._close_poll = QTimer(self)
+        self._close_poll.setInterval(80)
+        self._close_poll.timeout.connect(self._check_outside_press)
 
         card = QFrame(self)
         card.setObjectName("card")
@@ -187,28 +193,45 @@ class DetailPanel(QWidget):
         self.move(x, y)
         self.show()
         self.raise_()
-        if not self._filter_installed:
-            QApplication.instance().installEventFilter(self)
-            self._filter_installed = True
-        self._timer.start(1000)  # 倒计时每秒刷新
+        self._timer.start(1000)   # 倒计时每秒刷新
+        self._prev_held = self._any_button_held()
+        self._close_poll.start()  # 点击外部自动收起
 
     def hide_panel(self) -> None:
         self._timer.stop()
+        self._close_poll.stop()
         self.hide()
-        if self._filter_installed:
-            QApplication.instance().removeEventFilter(self)
-            self._filter_installed = False
 
-    def eventFilter(self, obj, event) -> bool:
-        """点击面板与余额条以外的任何位置 → 自动收起;Esc → 收起。"""
-        et = event.type()
-        if et == event.Type.MouseButtonPress:
-            gp = event.globalPosition().toPoint()
-            inside = self.geometry().contains(gp) or any(
-                r.contains(gp) for r in self._keep_rects)
-            if not inside:
-                self.hide_panel()
-        elif et == event.Type.KeyPress:
-            if event.key() == Qt.Key.Key_Escape:
-                self.hide_panel()
-        return False
+    # ------------------------------------------------------------ 点外关闭
+
+    @staticmethod
+    def _button_state(vk: int) -> int:
+        """返回按键状态位:0x8000=当前按着,0x0001=自上次查询以来按过。"""
+        if sys.platform != "win32":
+            return 0
+        return ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8001
+
+    @classmethod
+    def _any_button_held(cls) -> bool:
+        return bool((cls._button_state(0x01) | cls._button_state(0x02)) & 0x8000)
+
+    def _check_outside_press(self) -> None:
+        """轮询全局鼠标:检测到新的按下且位置在面板/余额条之外 → 收起。
+
+        不依赖 Qt 事件,因此点击任务栏或其他应用同样生效;
+        0x0001 锁存位兜底捕捉两次轮询之间完成的极快点击。
+        """
+        if not self.isVisible():
+            return
+        l, r = self._button_state(0x01), self._button_state(0x02)
+        press_event = bool(l or r)
+        held_now = bool((l | r) & 0x8000)
+        pressed_edge = press_event and not self._prev_held
+        self._prev_held = held_now
+        if not pressed_edge:
+            return
+        gp = QCursor.pos()
+        inside = self.geometry().contains(gp) or any(
+            rect.contains(gp) for rect in self._keep_rects)
+        if not inside:
+            self.hide_panel()

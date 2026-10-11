@@ -32,6 +32,18 @@ class _RECT(ctypes.Structure):
                 ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
 
 
+class _POINT(ctypes.Structure):
+    _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+
+
+# 独立的 user32 实例:WindowFromPoint 的 argtypes 挂在本模块私有函数指针上,
+# 避免与进程中其他代码共享 windll.user32 缓存函数对象时发生类型冲突
+_user32 = ctypes.WinDLL("user32", use_last_error=True)
+_win_from_point = _user32.WindowFromPoint
+_win_from_point.argtypes = [_POINT]
+_win_from_point.restype = wintypes.HWND
+
+
 def _taskbar_rects() -> tuple[tuple[int, int, int, int], int] | None:
     """返回 (任务栏矩形, 托盘左边界),均为物理像素;失败返回 None。"""
     if sys.platform != "win32":
@@ -95,7 +107,7 @@ class TaskbarBar(QWidget):
         self._tick_timer.start()
 
         self._anchor_timer = QTimer(self)
-        self._anchor_timer.setInterval(2000)
+        self._anchor_timer.setInterval(1000)
         self._anchor_timer.timeout.connect(self._maintain)
         self._anchor_timer.start()
 
@@ -227,18 +239,37 @@ class TaskbarBar(QWidget):
         self._user_hidden = hidden
 
     def _reassert_topmost(self) -> None:
-        """周期性重申 TOPMOST,避免被任务栏或后激活的置顶窗口压住。"""
+        """周期性保证余额条可见:检测是否被盖住(如点击任务栏后任务栏被
+        提到 topmost 层顶端,而余额条恰好住在任务栏区域内),被盖住则用
+        HWND_TOP 在 topmost 层内重排到顶端;否则轻量维持置顶。
+
+        注意:这台系统上 NOTOPMOST→TOPMOST 舞步与 hide/show 重显都只会
+        把窗口插回 topmost 层底部,唯有 HWND_TOP 能在层内真正重排。
+        """
         if sys.platform != "win32" or not self.isVisible():
             return
         try:
+            user32 = ctypes.windll.user32
             hwnd = int(self.winId())
-            HWND_TOPMOST = -1
-            SWP_NOMOVE, SWP_NOSIZE = 0x0002, 0x0001
-            SWP_NOACTIVATE = 0x0010
-            ctypes.windll.user32.SetWindowPos(
-                hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            SWP_FLAGS = 0x0001 | 0x0002 | 0x0010  # NOSIZE | NOMOVE | NOACTIVATE
+
+            # 用 WindowFromPoint 探测余额条中心点最顶层的窗口是不是自己
+            screen = self.screen() or QApplication.primaryScreen()
+            dpr = screen.devicePixelRatio() or 1.0
+            pt = _POINT(
+                int((self.x() + self.width() / 2) * dpr),
+                int((self.y() + self.height() / 2) * dpr),
             )
+            covered = True
+            hwnd_at = _win_from_point(pt)
+            if hwnd_at:
+                root = _user32.GetAncestor(hwnd_at, 2)  # GA_ROOT
+                covered = root != hwnd
+
+            if covered:
+                user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, SWP_FLAGS)  # HWND_TOP
+            else:
+                user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, SWP_FLAGS)  # HWND_TOPMOST
         except Exception:
             pass
 
