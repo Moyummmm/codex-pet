@@ -272,9 +272,12 @@ class DetailPanel(QWidget):
     @staticmethod
     def _button_state(vk: int) -> int:
         """返回按键状态位:0x8000=当前按着,0x0001=自上次查询以来按过。"""
-        if sys.platform != "win32":
-            return 0
-        return ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8001
+        if sys.platform == "win32":
+            return ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8001
+        if sys.platform == "darwin":
+            from . import macos_native
+            return macos_native.mouse_button_state(vk)
+        return 0
 
     @classmethod
     def _any_button_held(cls) -> bool:

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import QObject, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import (QAction, QColor, QFont, QIcon, QPainter, QPen,
+from PyQt6.QtGui import (QAction, QColor, QIcon, QPainter, QPen,
                          QPixmap)
 from PyQt6.QtWidgets import QMenu, QSystemTrayIcon
 
-from .colors import deepseek_color, fill_color
+from .colors import deepseek_color, fill_color, ui_font
 
 
 def make_tray_icon(remaining: int | None, status: str,
@@ -26,7 +26,7 @@ def make_tray_icon(remaining: int | None, status: str,
         p.setBrush(QColor(232, 238, 244) if not offline else QColor(225, 228, 232))
         p.drawEllipse(QRectF(8, 8, 48, 48))
         p.setPen(QColor(50, 55, 65) if not offline else QColor(120, 126, 136))
-        p.setFont(QFont("Segoe UI", 22, QFont.Weight.Bold))
+        p.setFont(ui_font(22, bold=True))
         p.drawText(QRectF(8, 8, 48, 48), Qt.AlignmentFlag.AlignCenter, "¥")
         p.end()
         return QIcon(pixmap)
@@ -49,11 +49,11 @@ def make_tray_icon(remaining: int | None, status: str,
 
     if remaining is not None and not offline:
         p.setPen(QColor(50, 55, 65))
-        p.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
+        p.setFont(ui_font(16, bold=True))
         p.drawText(body, Qt.AlignmentFlag.AlignCenter, str(remaining))
     else:
         p.setPen(QColor(90, 98, 110))
-        p.setFont(QFont("Segoe UI", 20, QFont.Weight.Bold))
+        p.setFont(ui_font(20))
         p.drawText(body, Qt.AlignmentFlag.AlignCenter, "Z")
     p.end()
     return QIcon(pixmap)

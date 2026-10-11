@@ -16,7 +16,7 @@ from codex_pet.codex_client import CodexClient
 from codex_pet.deepseek_client import DeepSeekClient
 from codex_pet.detail_panel import DetailPanel
 from codex_pet.provider import detect_provider
-from codex_pet.taskbar_bar import TaskbarBar
+from codex_pet.bar import TaskbarBar
 from codex_pet.tray import Tray
 
 app = QApplication(sys.argv)

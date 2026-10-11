@@ -11,7 +11,7 @@ from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
 from codex_pet.detail_panel import DetailPanel
-from codex_pet.taskbar_bar import TaskbarBar
+from codex_pet.bar import TaskbarBar
 
 app = QApplication(sys.argv)
 out = os.path.join(os.path.dirname(__file__), "shots")
@@ -51,7 +51,7 @@ def ds_payload(total, status="online"):
 def make_bar(payload):
     bar = TaskbarBar()
     bar._tick_timer.stop()
-    bar._anchor_timer.stop()
+    bar._maintain_timer.stop()
     bar.set_state(payload)
     bar.show()
     return bar

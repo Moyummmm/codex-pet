@@ -13,11 +13,11 @@ import sys
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
+from .bar import TaskbarBar
 from .codex_client import CodexClient
 from .deepseek_client import DeepSeekClient
 from .detail_panel import DetailPanel
 from .provider import detect_provider
-from .taskbar_bar import TaskbarBar
 from .tray import Tray
 
 PROVIDER_CHECK_MS = 60 * 1000
