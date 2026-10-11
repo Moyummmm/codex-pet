@@ -10,8 +10,8 @@ from __future__ import annotations
 import sys
 
 from PyQt6.QtCore import QObject, QPoint, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import (QAction, QColor, QCursor, QIcon, QPainter,
-                         QPainterPath, QPen, QPixmap)
+from PyQt6.QtGui import (QAction, QBrush, QColor, QCursor, QFont, QIcon,
+                         QPainter, QPainterPath, QPen, QPixmap)
 from PyQt6.QtWidgets import QMenu, QSystemTrayIcon
 
 from .colors import deepseek_color, fill_color, ui_font
@@ -21,9 +21,11 @@ IS_MAC = sys.platform == "darwin"
 
 def _draw_battery(size: int, remaining: int | None, offline: bool,
                   color: QColor) -> QPixmap:
-    """竖置胶囊电池:占满画布,内部容量按剩余额度从底部填充(100 满 / 50 半)。
+    """电池图标:竖置胶囊,容量线性填充(高度 = 内高 × 剩余% / 100)。
 
-    与系统横置电池形成区分;所有坐标按 size 等比缩放。
+    macOS 菜单栏参考系统电池:空 = 只有描边、内部透明;满 = 白色填充;
+    低电量(≤20%)红色;数字跨填充线自动反色。Windows 托盘保持
+    浅色底 + 彩色填充的原风格。
     """
     s = size / 64.0
     pixmap = QPixmap(size, size)
@@ -31,45 +33,82 @@ def _draw_battery(size: int, remaining: int | None, offline: bool,
     p = QPainter(pixmap)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
+    if IS_MAC:
+        body_brush = QBrush(Qt.BrushStyle.NoBrush)              # 透明内部
+        outline = QColor(198, 204, 214, 235)
+        fill_color = QColor(236, 240, 246)                      # 白(满)
+        if remaining is not None and not offline and remaining <= 20:
+            fill_color = QColor(255, 105, 107)                  # 低电量红
+        text_on_fill = QColor(36, 42, 52)
+        text_on_empty = QColor(240, 244, 250)
+        cap_color = QColor(198, 204, 214, 235)
+    else:
+        body_brush = QColor(232, 238, 244)                      # Windows:浅底
+        outline = QColor(120, 130, 145)
+        fill_color = color                                      # 电量分级色
+        text_on_fill = QColor(36, 42, 52)
+        text_on_empty = QColor(36, 42, 52)
+        cap_color = QColor(150, 160, 172)
+
     # 顶部电极帽
     p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QColor(150, 160, 172))
+    p.setBrush(cap_color)
     p.drawRoundedRect(QRectF(24 * s, 2 * s, 16 * s, 6.5 * s), 3 * s, 3 * s)
 
-    # 电池身(竖置胶囊,几乎占满画布)
+    # 电池身:描边 + (透明/浅色)内部
     body = QRectF(10 * s, 10 * s, 44 * s, 52 * s)
-    p.setPen(QPen(QColor(120, 130, 145), 3 * s))
-    p.setBrush(QColor(232, 238, 244))
+    p.setPen(QPen(outline, 3 * s))
+    p.setBrush(body_brush)
     p.drawRoundedRect(body, 12 * s, 12 * s)
 
-    if remaining is not None and not offline:
-        # 内部容量:内缩后从底部按比例填充
+    body_path = QPainterPath()
+    body_path.addRoundedRect(body, 12 * s, 12 * s)
+
+    has_fill = remaining is not None and not offline and remaining > 0
+    fill_path = QPainterPath()
+    if has_fill:
         inset = 4 * s
         inner = body.adjusted(inset, inset, -inset, -inset)
         fill_h = inner.height() * max(0, min(100, remaining)) / 100
         fill_rect = QRectF(inner.left(), inner.bottom() - fill_h,
                            inner.width(), fill_h)
-        path = QPainterPath()
-        path.addRoundedRect(fill_rect, 5.5 * s, 5.5 * s)
+        fill_path.addRoundedRect(fill_rect, 5.5 * s, 5.5 * s)
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(color)
-        p.drawPath(path)
+        p.setBrush(fill_color)
+        p.drawPath(fill_path)
 
-    # 数字/状态字(嵌在电池内)
-    if remaining is not None and not offline:
-        p.setPen(QColor(36, 42, 52))
-        font = ui_font(17, bold=True)
-        font.setPixelSize(max(8, round(19 * s)))
-        p.setFont(font)
-        p.drawText(body, Qt.AlignmentFlag.AlignCenter, str(remaining))
+    # 数字/状态字:跨填充线双色——填充区内深色,透明区浅色
+    if offline:
+        text, t_fill, t_empty = "Z", text_on_empty, text_on_empty
+    elif remaining is None:
+        text, t_fill, t_empty = "…", text_on_empty, text_on_empty
     else:
-        p.setPen(QColor(90, 98, 110))
-        font = ui_font(20)
-        font.setPixelSize(max(9, round(24 * s)))
-        p.setFont(font)
-        p.drawText(body, Qt.AlignmentFlag.AlignCenter, "Z")
+        text = str(remaining)
+        t_fill, t_empty = text_on_fill, text_on_empty
+
+    p.setFont(_battery_font(size, text))
+    p.setClipPath(body_path.subtracted(fill_path))
+    p.setPen(QPen(t_empty))
+    p.drawText(body, Qt.AlignmentFlag.AlignCenter, text)
+    if has_fill:
+        p.setClipping(False)
+        p.setClipPath(fill_path)
+        p.setPen(QPen(t_fill))
+        p.drawText(body, Qt.AlignmentFlag.AlignCenter, text)
+    p.setClipping(False)
     p.end()
     return pixmap
+
+
+def _battery_font(size: int, text: str) -> QFont:
+    """电池内文字:像素字号随图标尺寸缩放,3 位数略缩。"""
+    s = size / 64.0
+    font = ui_font(17, bold=True)
+    px = 19 * s
+    if len(text) >= 3:
+        px *= 0.82
+    font.setPixelSize(max(8, round(px)))
+    return font
 
 
 def _draw_deepseek(size: int, offline: bool, color: QColor) -> QPixmap:
