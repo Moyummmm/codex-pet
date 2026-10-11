@@ -11,7 +11,7 @@
 | ChatGPT(默认) | `● Codex 29% · 2h15m`(5 小时窗口剩余配额) |
 | DeepSeek | `● DeepSeek ¥354.27`(官方 API 余额,总/赠/充在详情面板) |
 
-![余额条](shots/bar_mid.png) ![DeepSeek 模式](shots/bar_ds.png)
+![余额条](docs/shots/bar_mid.png) ![DeepSeek 模式](docs/shots/bar_ds.png)
 
 ## 功能
 
@@ -72,7 +72,7 @@ uv run codex-pet
 
 ```bash
 uv run --with pyinstaller pyinstaller --onefile --windowed \
-    --name CodexPet --paths src launcher.py --noconfirm
+    --name CodexPet --paths src scripts/launcher.py --noconfirm
 ```
 
 产物在 `dist/CodexPet.exe`(约 36MB),双击即可运行,无需 Python 环境。
@@ -83,7 +83,7 @@ uv run --with pyinstaller pyinstaller --onefile --windowed \
 uv run python scripts/make_icns.py                      # 生成应用图标
 uv run --with pyinstaller pyinstaller --windowed \
     --name CodexPet --icon assets/CodexPet.icns \
-    --paths src launcher.py --noconfirm                 # 出 dist/CodexPet.app
+    --paths src scripts/launcher.py --noconfirm                 # 出 dist/CodexPet.app
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.simonyuann.codexpet" \
     -c "Set :CFBundleShortVersionString 1.4.1" \
     -c "Add :LSUIElement bool true" dist/CodexPet.app/Contents/Info.plist
@@ -93,13 +93,17 @@ codesign --force --deep --sign - dist/CodexPet.app      # ad-hoc 签名
 ## 开发自检脚本
 
 ```bash
-uv run python test_smoke.py    # 端到端冒烟测试(离屏,验证真实数据链路,含 DeepSeek)
-uv run python test_render.py   # 渲染余额条各状态截图到 shots/
+uv run python tests/test_smoke.py    # 端到端冒烟测试(离屏,验证真实数据链路,含 DeepSeek)
+uv run python tests/test_render.py   # 渲染余额条各状态截图到 docs/shots/
+uv run python tests/test_anchor.py   # Win32 任务栏稳定锚定测试(仅 Windows)
 ```
 
 ## 项目结构
 
 ```
+launcher 打包入口 scripts/launcher.py;应用图标 assets/;设计文档 docs/specs;
+状态截图 docs/shots;测试脚本 tests/。
+
 src/codex_pet/
 ├── __main__.py      # 入口:平台化装配各组件、提供方自动切换
 ├── status_bar.py    # 共享胶囊条基类(文案/测量/绘制/拖拽/右键菜单)
