@@ -1,6 +1,6 @@
 # Codex Pet ⚡
 
-一个实时显示 **Codex / ChatGPT Plus** 配额余额的桌面小工具,支持 **DeepSeek API 余额**自动切换。Windows 锚定任务栏托盘左侧的悬浮胶囊条;macOS 直接显示为菜单栏里的**电量电池**(剩余额度数字嵌在电池内),点击弹出详情。
+一个实时显示 **Codex / ChatGPT Plus** 配额余额的桌面小工具,支持 **DeepSeek API 余额**自动切换。Windows 锚定任务栏托盘左侧的悬浮胶囊条;macOS 直接显示为菜单栏里的**竖置胶囊电池**(剩余额度数字嵌在电池内,容量随余额增减:100 满格、50 半格,颜色绿/橙/红),点击弹出详情。
 
 全屏看视频/玩游戏时自动隐藏(Windows;与任务栏自身行为一致),退出全屏自动恢复。
 
@@ -85,7 +85,7 @@ uv run --with pyinstaller pyinstaller --windowed \
     --name CodexPet --icon assets/CodexPet.icns \
     --paths src launcher.py --noconfirm                 # 出 dist/CodexPet.app
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.simonyuann.codexpet" \
-    -c "Set :CFBundleShortVersionString 1.4.0" \
+    -c "Set :CFBundleShortVersionString 1.4.1" \
     -c "Add :LSUIElement bool true" dist/CodexPet.app/Contents/Info.plist
 codesign --force --deep --sign - dist/CodexPet.app      # ad-hoc 签名
 ```

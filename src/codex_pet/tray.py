@@ -10,8 +10,8 @@ from __future__ import annotations
 import sys
 
 from PyQt6.QtCore import QObject, QPoint, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import (QAction, QColor, QCursor, QIcon, QPainter, QPen,
-                         QPixmap)
+from PyQt6.QtGui import (QAction, QColor, QCursor, QIcon, QPainter,
+                         QPainterPath, QPen, QPixmap)
 from PyQt6.QtWidgets import QMenu, QSystemTrayIcon
 
 from .colors import deepseek_color, fill_color, ui_font
@@ -19,56 +19,93 @@ from .colors import deepseek_color, fill_color, ui_font
 IS_MAC = sys.platform == "darwin"
 
 
-def make_tray_icon(remaining: int | None, status: str,
-                   provider: str = "codex", ds_total: float | None = None) -> QIcon:
-    """画一个 64x64 的菜单栏图标:电池内嵌剩余数字 / DeepSeek ¥ 圆标。"""
-    pixmap = QPixmap(64, 64)
+def _draw_battery(size: int, remaining: int | None, offline: bool,
+                  color: QColor) -> QPixmap:
+    """竖置胶囊电池:占满画布,内部容量按剩余额度从底部填充(100 满 / 50 半)。
+
+    与系统横置电池形成区分;所有坐标按 size 等比缩放。
+    """
+    s = size / 64.0
+    pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)
     p = QPainter(pixmap)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-    offline = status != "online"
+    # 顶部电极帽
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(150, 160, 172))
+    p.drawRoundedRect(QRectF(24 * s, 2 * s, 16 * s, 6.5 * s), 3 * s, 3 * s)
 
-    if provider == "deepseek":
-        color = deepseek_color(ds_total) if not offline else QColor(170, 177, 186)
-        p.setPen(QPen(color, 5))
-        p.setBrush(QColor(232, 238, 244) if not offline else QColor(225, 228, 232))
-        p.drawEllipse(QRectF(8, 8, 48, 48))
-        p.setPen(QColor(50, 55, 65) if not offline else QColor(120, 126, 136))
-        p.setFont(ui_font(22, bold=True))
-        p.drawText(QRectF(8, 8, 48, 48), Qt.AlignmentFlag.AlignCenter, "¥")
-        p.end()
-        return QIcon(pixmap)
-
-    body = QRectF(5, 14, 52, 36)
-    color = fill_color(remaining, offline)
-
-    p.setPen(QPen(QColor(120, 130, 145), 3))
+    # 电池身(竖置胶囊,几乎占满画布)
+    body = QRectF(10 * s, 10 * s, 44 * s, 52 * s)
+    p.setPen(QPen(QColor(120, 130, 145), 3 * s))
     p.setBrush(QColor(232, 238, 244))
-    p.drawRoundedRect(body, 9, 9)
-    p.setBrush(QColor(120, 130, 145))
-    p.drawRoundedRect(QRectF(58, 24, 5, 16), 2, 2)
+    p.drawRoundedRect(body, 12 * s, 12 * s)
 
     if remaining is not None and not offline:
-        fill_h = (body.height() - 4) * remaining / 100
+        # 内部容量:内缩后从底部按比例填充
+        inset = 4 * s
+        inner = body.adjusted(inset, inset, -inset, -inset)
+        fill_h = inner.height() * max(0, min(100, remaining)) / 100
+        fill_rect = QRectF(inner.left(), inner.bottom() - fill_h,
+                           inner.width(), fill_h)
+        path = QPainterPath()
+        path.addRoundedRect(fill_rect, 5.5 * s, 5.5 * s)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(color)
-        p.drawRoundedRect(
-            QRectF(body.left() + 2, body.bottom() - 2 - fill_h,
-                   body.width() - 4, fill_h),
-            6, 6,
-        )
+        p.drawPath(path)
 
+    # 数字/状态字(嵌在电池内)
     if remaining is not None and not offline:
-        p.setPen(QColor(50, 55, 65))
-        p.setFont(ui_font(20, bold=True))
+        p.setPen(QColor(36, 42, 52))
+        font = ui_font(17, bold=True)
+        font.setPixelSize(max(8, round(19 * s)))
+        p.setFont(font)
         p.drawText(body, Qt.AlignmentFlag.AlignCenter, str(remaining))
     else:
         p.setPen(QColor(90, 98, 110))
-        p.setFont(ui_font(22))
+        font = ui_font(20)
+        font.setPixelSize(max(9, round(24 * s)))
+        p.setFont(font)
         p.drawText(body, Qt.AlignmentFlag.AlignCenter, "Z")
     p.end()
-    return QIcon(pixmap)
+    return pixmap
+
+
+def _draw_deepseek(size: int, offline: bool, color: QColor) -> QPixmap:
+    """DeepSeek 模式:¥ 圆标。"""
+    s = size / 64.0
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pixmap)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(QPen(color, 4.5 * s))
+    p.setBrush(QColor(232, 238, 244) if not offline else QColor(225, 228, 232))
+    p.drawEllipse(QRectF(6 * s, 6 * s, 52 * s, 52 * s))
+    p.setPen(QColor(50, 55, 65) if not offline else QColor(120, 126, 136))
+    font = ui_font(22, bold=True)
+    font.setPixelSize(max(9, round(28 * s)))
+    p.setFont(font)
+    p.drawText(QRectF(6 * s, 6 * s, 52 * s, 52 * s),
+               Qt.AlignmentFlag.AlignCenter, "¥")
+    p.end()
+    return pixmap
+
+
+def make_tray_icon(remaining: int | None, status: str,
+                   provider: str = "codex", ds_total: float | None = None) -> QIcon:
+    """菜单栏图标:多尺寸位图(32/48/64/128)保证 Retina 下清晰。"""
+    offline = status != "online"
+    icon = QIcon()
+    for size in (32, 48, 64, 128):
+        if provider == "deepseek":
+            color = (deepseek_color(ds_total) if not offline
+                     else QColor(170, 177, 186))
+            icon.addPixmap(_draw_deepseek(size, offline, color))
+        else:
+            color = fill_color(remaining, offline)
+            icon.addPixmap(_draw_battery(size, remaining, offline, color))
+    return icon
 
 
 class Tray(QObject):
