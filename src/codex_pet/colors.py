@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from PyQt6.QtGui import QColor
+import sys
+
+from PyQt6.QtGui import QColor, QFont
 
 COL_BODY_EMPTY = QColor(232, 238, 244)
 COL_BODY_EMPTY_DARK = QColor(205, 214, 224)
@@ -33,3 +35,14 @@ def fill_color(remaining: int | None, offline: bool) -> QColor:
     if remaining > 30:
         return COL_MID
     return COL_LOW
+
+
+def ui_font(size: int, bold: bool = False) -> QFont:
+    """平台 UI 字体:Windows 用 Segoe UI,其余平台用系统默认(如 SF Pro)。"""
+    if sys.platform == "win32":
+        font = QFont("Segoe UI", size)
+    else:
+        font = QFont()
+        font.setPointSize(size)
+    font.setBold(bold)
+    return font

@@ -3,8 +3,12 @@
 import os
 import sys
 
+if sys.platform != "win32":
+    print("test_anchor: Win32 任务栏锚定专属,当前平台跳过")
+    sys.exit(0)
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import codex_pet.taskbar_bar as tbb
 from codex_pet.config import load_config
@@ -25,8 +29,11 @@ bar._tick_timer.stop()
 bar._maintain_timer.stop()
 bar._fast_timer.stop()
 # 偏移归零、保存拦截:测试完全确定性,不读写真实配置文件
+import codex_pet.status_bar as status_bar
 tbb.load_config = lambda: {"bar_offset": [0, 0]}
 tbb.save_config = lambda cfg: saved.update(cfg)
+status_bar.load_config = tbb.load_config
+status_bar.save_config = tbb.save_config
 bar.show()
 app.processEvents()
 start_pos = (bar.x(), bar.y())

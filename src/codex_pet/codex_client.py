@@ -8,7 +8,9 @@ ChatGPT Plus / Codex 配额。鉴权完全由 Codex CLI 自行处理,本项目�
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import sys
 import time
 from dataclasses import dataclass, field
 
@@ -131,23 +133,42 @@ class CodexClient(QObject):
     def _locate_codex() -> tuple[str | None, list[str]]:
         """返回 (程序, 前置参数);最终调用为 prog + pre_args + ["app-server"]。
 
-        优先找原生 codex.exe;.cmd/.bat 垫片需经由 cmd 启动。
+        Windows 优先找原生 codex.exe;.cmd/.bat 垫片需经由 cmd 启动。
+        macOS 显式列出常见安装位置——GUI 启动(.app 从 Finder 打开)时
+        PATH 只有 /usr/bin:/bin 等系统目录,找不到 homebrew/npm 装的 codex。
         """
-        import os
-
         candidates: list[tuple[str, list[str]]] = []
-        native = os.path.expandvars(
-            r"%LOCALAPPDATA%\Programs\OpenAI\Codex\bin\codex.exe"
-        )
-        if os.path.isfile(native):
-            candidates.append((native, []))
-        for name in ("codex.exe", "codex"):
-            found = shutil.which(name)
-            if found and os.path.isfile(found):
-                if found.lower().endswith((".cmd", ".bat")):
-                    candidates.append(("cmd.exe", ["/c", found]))
-                else:
-                    candidates.append((found, []))
+
+        if sys.platform == "win32":
+            native = os.path.expandvars(
+                r"%LOCALAPPDATA%\Programs\OpenAI\Codex\bin\codex.exe"
+            )
+            if os.path.isfile(native):
+                candidates.append((native, []))
+            for name in ("codex.exe", "codex"):
+                found = shutil.which(name)
+                if found and os.path.isfile(found):
+                    if found.lower().endswith((".cmd", ".bat")):
+                        candidates.append(("cmd.exe", ["/c", found]))
+                    else:
+                        candidates.append((found, []))
+            return candidates[0] if candidates else (None, [])
+
+        if sys.platform == "darwin":
+            home = os.path.expanduser("~")
+            for path in (
+                "/opt/homebrew/bin/codex",
+                "/usr/local/bin/codex",
+                os.path.join(home, ".local", "bin", "codex"),
+                os.path.join(home, ".npm-global", "bin", "codex"),
+                "/usr/bin/codex",
+            ):
+                if os.path.isfile(path):
+                    candidates.append((path, []))
+
+        found = shutil.which("codex")
+        if found and os.path.isfile(found):
+            candidates.append((found, []))
         return candidates[0] if candidates else (None, [])
 
     def refresh(self) -> None:
@@ -173,6 +194,13 @@ class CodexClient(QObject):
         proc.setArguments([*self._codex_args, "app-server"])
         # 保证子进程能读到 HOME/USERPROFILE 下的 ~/.codex
         env = QProcessEnvironment.systemEnvironment()
+        if sys.platform == "darwin":
+            # GUI 启动时 PATH 有限:codex 可能是依赖 env node 的脚本垫片,
+            # 把常见可执行目录补进 PATH,保证 app-server 能正常拉起
+            extra = ["/opt/homebrew/bin", "/usr/local/bin",
+                     os.path.expanduser("~/.local/bin")]
+            env.insert("PATH", ":".join(extra) + ":"
+                       + (env.value("PATH") or "/usr/bin:/bin:/usr/sbin:/sbin"))
         proc.setProcessEnvironment(env)
         proc.readyReadStandardOutput.connect(self._on_stdout)
         proc.readyReadStandardError.connect(self._on_stderr)

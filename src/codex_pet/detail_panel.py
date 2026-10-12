@@ -23,6 +23,11 @@ PLAN_NAMES = {
     "enterprise": "Enterprise",
 }
 
+BTN_IDLE = "color: #3b82f6; font-weight: bold; border: none;"
+BTN_BUSY = "color: #8a94a3; font-weight: bold; border: none;"
+BTN_OK = "color: #2fae74; font-weight: bold; border: none;"
+BTN_MISS = "color: #d29a3a; font-weight: bold; border: none;"
+
 
 def _fmt_countdown(resets_at) -> str:
     if not resets_at:
@@ -112,6 +117,15 @@ class DetailPanel(QWidget):
         self._payload: dict = {}
         self._keep_rects: list[QRect] = []  # 点击这些区域内不关闭(面板自身 + 余额条)
         self._prev_held = False             # 上次轮询时鼠标按住状态(用于按下沿检测)
+        # 刷新反馈:进行中禁用按钮;updated_at 变化 = 拿到新数据;超时提示
+        self._refreshing = False
+        self._baseline: tuple = ()
+        self._btn_restore = QTimer(self)
+        self._btn_restore.setSingleShot(True)
+        self._btn_restore.timeout.connect(self._restore_btn)
+        self._refresh_timeout = QTimer(self)
+        self._refresh_timeout.setSingleShot(True)
+        self._refresh_timeout.timeout.connect(self._on_refresh_timeout)
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh_labels)
         # 全局鼠标轮询:点击本进程以外的窗口(任务栏/其他应用)时也能收到
@@ -136,7 +150,7 @@ class DetailPanel(QWidget):
         self.refresh_btn = QPushButton("刷新")
         self.refresh_btn.setFlat(True)
         self.refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.refresh_btn.setStyleSheet("color: #3b82f6; font-weight: bold; border: none;")
+        self.refresh_btn.setStyleSheet(BTN_IDLE)
         title.addWidget(self.refresh_btn)
         root.addLayout(title)
 
@@ -177,9 +191,48 @@ class DetailPanel(QWidget):
         self.adjustSize()
 
     def set_state(self, payload: dict | None) -> None:
-        """接收统一状态快照(main.compose 生成)。"""
+        """接收统一状态快照(main.compose 生成);刷新中检测新数据给出反馈。"""
         self._payload = payload or {}
+        if self._refreshing:
+            codex = self._payload.get("codex") or {}
+            ds = self._payload.get("deepseek") or {}
+            if ((codex.get("updated_at"), ds.get("updated_at"))
+                    != self._baseline):
+                self._finish_refresh(ok=True)
         self._refresh_labels()
+
+    # ------------------------------------------------------------ 刷新反馈
+
+    def begin_refresh(self) -> None:
+        """外部触发刷新:按钮进入进行中状态,数据到达/超时后给出反馈。"""
+        codex = self._payload.get("codex") or {}
+        ds = self._payload.get("deepseek") or {}
+        self._baseline = (codex.get("updated_at"), ds.get("updated_at"))
+        self._refreshing = True
+        self.refresh_btn.setEnabled(False)
+        self.refresh_btn.setText("刷新中…")
+        self.refresh_btn.setStyleSheet(BTN_BUSY)
+        self.updated_label.setText("正在请求最新数据…")
+        self._refresh_timeout.start(8000)
+
+    def _finish_refresh(self, ok: bool) -> None:
+        if not self._refreshing:
+            return
+        self._refreshing = False
+        self._refresh_timeout.stop()
+        self.refresh_btn.setEnabled(True)
+        self.refresh_btn.setText("✓ 已刷新" if ok else "未收到新数据")
+        self.refresh_btn.setStyleSheet(BTN_OK if ok else BTN_MISS)
+        self._btn_restore.start(2500)
+
+    def _restore_btn(self) -> None:
+        if not self._refreshing:
+            self.refresh_btn.setText("刷新")
+            self.refresh_btn.setStyleSheet(BTN_IDLE)
+
+    def _on_refresh_timeout(self) -> None:
+        if self._refreshing:
+            self._finish_refresh(ok=False)
 
     def _refresh_labels(self) -> None:
         p = self._payload
@@ -272,9 +325,12 @@ class DetailPanel(QWidget):
     @staticmethod
     def _button_state(vk: int) -> int:
         """返回按键状态位:0x8000=当前按着,0x0001=自上次查询以来按过。"""
-        if sys.platform != "win32":
-            return 0
-        return ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8001
+        if sys.platform == "win32":
+            return ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8001
+        if sys.platform == "darwin":
+            from . import macos_native
+            return macos_native.mouse_button_state(vk)
+        return 0
 
     @classmethod
     def _any_button_held(cls) -> bool:

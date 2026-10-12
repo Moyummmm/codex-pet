@@ -1,9 +1,8 @@
 # Codex Pet ⚡
 
-一个实时显示 **Codex / ChatGPT Plus** 配额余额的 Windows 任务栏小工具,支持 **DeepSeek API 余额**自动切换。
+一个实时显示 **Codex / ChatGPT Plus** 配额余额的桌面小工具,支持 **DeepSeek API 余额**自动切换。Windows 锚定任务栏托盘左侧的悬浮胶囊条;macOS 直接显示为菜单栏里的**竖置胶囊电池**(剩余额度数字嵌在电池内,容量随余额增减:100 满格、50 半格,颜色绿/橙/红),点击弹出详情。
 
-在任务栏托盘左侧显示一行紧凑文字,状态圆点随余额变色,不占用桌面空间。
-全屏看视频/玩游戏时自动隐藏(与任务栏自身行为一致),退出全屏自动恢复。
+全屏看视频/玩游戏时自动隐藏(Windows;与任务栏自身行为一致),退出全屏自动恢复。
 
 **双模式自动切换**(每 60 秒检测 `~/.codex/config.toml`):
 
@@ -12,7 +11,7 @@
 | ChatGPT(默认) | `● Codex 29% · 2h15m`(5 小时窗口剩余配额) |
 | DeepSeek | `● DeepSeek ¥354.27`(官方 API 余额,总/赠/充在详情面板) |
 
-![余额条](shots/bar_mid.png) ![DeepSeek 模式](shots/bar_ds.png)
+![余额条](docs/shots/bar_mid.png) ![DeepSeek 模式](docs/shots/bar_ds.png)
 
 ## 功能
 
@@ -22,19 +21,21 @@
 - **详情面板**:点击弹出——DeepSeek 总/赠/充余额与 ChatGPT 双窗口进度条;点击面板以外任何位置或按 Esc 自动收起
 - **全屏自动隐藏**:检测到真正的全屏应用(全屏视频/游戏/幻灯片)时隐藏,最大化窗口不受影响;退出全屏恢复
 - **置顶强化**:每秒检测是否被其他置顶窗口(如任务栏)盖住,被盖自动重排回顶端;任务栏挪动/分辨率变化时跟随锚定
-- **系统托盘**:模式化图标(配额电量 / DeepSeek ¥)+ 悬停提示
+- **系统托盘**:模式化图标(配额电量 / DeepSeek ¥)+ 悬停提示;macOS 菜单栏图标即主显示
 - **零凭证接触**:ChatGPT 鉴权完全由 Codex CLI 自己管理;DeepSeek 密钥只用于调余额接口,不写日志
-- **离线兜底**:codex 未安装/未登录时显示离线状态,进程崩溃自动退避重启;DeepSeek 密钥无效时明确提示
+- **离线兜底**:codex 未安装/未登录时显示离线状态(电池显示 Z),进程崩溃自动退避重启;DeepSeek 密钥无效时明确提示
 
 ## 环境要求
 
-- Windows 10/11
+- Windows 10/11 或 macOS 12+(Apple Silicon)
 - 已安装并登录 [Codex CLI](https://developers.openai.com/codex)(即 `codex` 命令可用,ChatGPT Plus 订阅)
-- [uv](https://docs.astral.sh/uv/)(Python 环境管理)
+- [uv](https://docs.astral.sh/uv/)(Python 环境管理,仅源码运行需要)
 
 ## 运行
 
-**方式一**:从 [Releases](../../releases) 下载 `CodexPet.exe`,双击即可,无需 Python 环境。
+**方式一**:从 [Releases](../../releases) 下载——Windows 下载 `CodexPet.exe`,macOS(Apple Silicon)下载 `CodexPet-macos-arm64.zip`,解压得 `CodexPet.app`,拖入「应用程序」双击即可,无需 Python 环境。
+
+> macOS 未公证应用首次打开:右键 `CodexPet.app` → 打开 → 再点「打开」;或终端执行 `xattr -cr /Applications/CodexPet.app`。应用为菜单栏小工具(LSUIElement),无 Dock 图标,通过菜单栏图标退出。
 
 **方式二**:源码运行
 
@@ -47,13 +48,13 @@ uv run codex-pet
 
 ## 交互
 
-| 操作 | 效果 |
-| --- | --- |
-| 左键点击余额条 | 弹出/收起详情面板 |
-| 点击面板以外任何位置 / Esc | 收起详情面板 |
-| 按住拖拽余额条 | 微调位置(自动记忆;任务栏挪动时跟随锚定) |
-| 右键余额条 | 菜单:立即刷新 / 重置位置 / 退出 |
-| 托盘图标 | 单击显示/隐藏余额条;菜单同上 |
+| 操作 | 效果(Windows) | 效果(macOS) |
+| --- | --- | --- |
+| 左键点击余额条/电池图标 | 弹出/收起详情面板 | 弹出/收起详情面板 |
+| 点击面板以外任何位置 / Esc | 收起详情面板 | 收起详情面板 |
+| 按住拖拽余额条 | 微调位置(自动记忆) | —(位置由系统管理) |
+| 右键余额条/电池图标 | 菜单:立即刷新 / 重置位置 / 退出 | 菜单:立即刷新 / 退出 |
+| 托盘图标 | 单击显示/隐藏余额条;菜单同上 | —(即主显示) |
 
 ## 配置
 
@@ -65,34 +66,55 @@ uv run codex-pet
 }
 ```
 
-## 打包成 exe(可选)
+## 打包(可选)
+
+**Windows exe:**
 
 ```bash
 uv run --with pyinstaller pyinstaller --onefile --windowed \
-    --name CodexPet --paths src launcher.py --noconfirm
+    --name CodexPet --paths src scripts/launcher.py --noconfirm
 ```
 
 产物在 `dist/CodexPet.exe`(约 36MB),双击即可运行,无需 Python 环境。
 
+**macOS app(Apple Silicon):**
+
+```bash
+uv run python scripts/make_icns.py                      # 生成应用图标
+uv run --with pyinstaller pyinstaller --windowed \
+    --name CodexPet --icon assets/CodexPet.icns \
+    --paths src scripts/launcher.py --noconfirm                 # 出 dist/CodexPet.app
+/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.simonyuann.codexpet" \
+    -c "Set :CFBundleShortVersionString 1.4.3" \
+    -c "Add :LSUIElement bool true" dist/CodexPet.app/Contents/Info.plist
+codesign --force --deep --sign - dist/CodexPet.app      # ad-hoc 签名
+```
+
 ## 开发自检脚本
 
 ```bash
-uv run python test_smoke.py    # 端到端冒烟测试(离屏,验证真实数据链路,含 DeepSeek)
-uv run python test_render.py   # 渲染余额条各状态截图到 shots/
+uv run python tests/test_smoke.py    # 端到端冒烟测试(离屏,验证真实数据链路,含 DeepSeek)
+uv run python tests/test_render.py   # 渲染余额条各状态截图到 docs/shots/
+uv run python tests/test_anchor.py   # Win32 任务栏稳定锚定测试(仅 Windows)
 ```
 
 ## 项目结构
 
 ```
+launcher 打包入口 scripts/launcher.py;应用图标 assets/;设计文档 docs/specs;
+状态截图 docs/shots;测试脚本 tests/。
+
 src/codex_pet/
-├── __main__.py      # 入口:装配各组件、提供方自动切换
+├── __main__.py      # 入口:平台化装配各组件、提供方自动切换
+├── status_bar.py    # 共享胶囊条基类(文案/测量/绘制/拖拽/右键菜单)
+├── taskbar_bar.py   # Windows:Win32 任务栏/托盘探测 + 全屏检测 + 置顶强化
+├── macos_native.py  # macOS 原生 API 的 ctypes 封装(CoreGraphics 鼠标状态)
 ├── codex_client.py  # codex app-server JSONL 客户端(QProcess + JSON-RPC 2.0)
 ├── deepseek_client.py # DeepSeek 官方 /user/balance 客户端(QNetworkAccessManager)
 ├── provider.py      # 解析 ~/.codex/config.toml 检测当前提供方
-├── taskbar_bar.py   # 任务栏余额条(Win32 任务栏/托盘探测 + 全屏检测 + 置顶强化)
 ├── detail_panel.py  # 点击弹出的详情浮层(DeepSeek 余额 + 双窗口配额)
-├── tray.py          # 系统托盘
-├── colors.py        # 共享配色
+├── tray.py          # 系统托盘/macOS 菜单栏电池图标(即主显示)
+├── colors.py        # 共享配色与平台字体
 └── config.py        # 配置读写(~/.codex-pet/config.json)
 ```
 
