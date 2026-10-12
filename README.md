@@ -23,7 +23,8 @@
 - **置顶强化**:每秒检测是否被其他置顶窗口(如任务栏)盖住,被盖自动重排回顶端;任务栏挪动/分辨率变化时跟随锚定
 - **系统托盘**:模式化图标(配额电量 / DeepSeek ¥)+ 悬停提示;macOS 菜单栏图标即主显示
 - **零凭证接触**:ChatGPT 鉴权完全由 Codex CLI 自己管理;DeepSeek 密钥只用于调余额接口,不写日志
-- **离线兜底**:codex 未安装/未登录时显示离线状态(电池显示 Z),进程崩溃自动退避重启;DeepSeek 密钥无效时明确提示
+- **CD 锚定(auto_anchor,可选)**:Codex 的 5 小时窗口从第一次真实请求起算——额度用完后若拖延才用,窗口起点会被动后延。开启后,在窗口重置时刻自动发一条最小请求(`codex exec`,几十 token)"开窗",让 5 小时周期从重置节点起算、首尾相接;仅在上个窗口真的用完时锚定,错过锚点(如睡眠)超 5 分钟自动放弃
+- **离线兜底**:codex 未安装/未登录时显示离线状态(图标显示 Z),进程崩溃自动退避重启;DeepSeek 密钥无效时明确提示
 
 ## 环境要求
 
@@ -62,7 +63,8 @@ uv run codex-pet
 
 ```jsonc
 {
-  "bar_offset": [0, 0]  // 余额条相对任务栏托盘左侧锚点的偏移
+  "bar_offset": [0, 0],    // 余额条相对任务栏托盘左侧锚点的偏移
+  "auto_anchor": false     // CD 锚定:额度用完后在重置时刻自动"开窗"(见功能列表)
 }
 ```
 
@@ -85,7 +87,7 @@ uv run --with pyinstaller pyinstaller --windowed \
     --name CodexPet --icon assets/CodexPet.icns \
     --paths src scripts/launcher.py --noconfirm                 # 出 dist/CodexPet.app
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.simonyuann.codexpet" \
-    -c "Set :CFBundleShortVersionString 1.4.4" \
+    -c "Set :CFBundleShortVersionString 1.5.0" \
     -c "Add :LSUIElement bool true" dist/CodexPet.app/Contents/Info.plist
 codesign --force --deep --sign - dist/CodexPet.app      # ad-hoc 签名
 ```

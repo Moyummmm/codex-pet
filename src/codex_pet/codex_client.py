@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 
 from PyQt6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, pyqtSignal
 
+from .config import load_config
+
 INITIALIZE = "initialize"
 READ_RATE_LIMITS = "account/rateLimits/read"
 RATE_LIMITS_UPDATED = "account/rateLimits/updated"
@@ -23,6 +25,14 @@ RATE_LIMITS_UPDATED = "account/rateLimits/updated"
 POLL_INTERVAL_MS = 5 * 60 * 1000  # 兜底轮询:5 分钟
 RESTART_BASE_MS = 2000            # 进程崩溃重启退避基数
 RESTART_MAX_MS = 5 * 60 * 1000
+
+# CD 锚定(auto_anchor):额度耗尽后,在窗口重置时刻自动发一条最小请求
+# "开窗",让 5 小时周期从重置节点起算、首尾相接(窗口计时从第一次真实
+# 请求开始,纯读接口不算)。
+ANCHOR_DELAY_S = 10          # resets_at 之后的缓冲,吸收服务器时钟偏差
+ANCHOR_LATE_LIMIT_S = 300    # 错过锚点超过 5 分钟(如睡眠)就放弃,等真实使用自然开窗
+ANCHOR_PROMPT = "Reply with OK"
+ANCHOR_TIMEOUT_MS = 120_000
 
 
 @dataclass
@@ -120,6 +130,14 @@ class CodexClient(QObject):
         self._restart_timer.setSingleShot(True)
         self._restart_timer.timeout.connect(self._start_process)
 
+        # CD 锚定状态(见 _schedule_anchor)
+        self._anchor_timer = QTimer(self)
+        self._anchor_timer.setSingleShot(True)
+        self._anchor_timer.timeout.connect(self._maybe_anchor)
+        self._anchor_proc: QProcess | None = None
+        self._last_remaining: int | None = None    # 最近一次主窗口 remaining
+        self._last_resets_at: float | None = None  # 最近一次主窗口重置时刻
+
     # ------------------------------------------------------------------ 公共
 
     def start(self) -> None:
@@ -193,15 +211,7 @@ class CodexClient(QObject):
         proc.setProgram(self._codex_exe)
         proc.setArguments([*self._codex_args, "app-server"])
         # 保证子进程能读到 HOME/USERPROFILE 下的 ~/.codex
-        env = QProcessEnvironment.systemEnvironment()
-        if sys.platform == "darwin":
-            # GUI 启动时 PATH 有限:codex 可能是依赖 env node 的脚本垫片,
-            # 把常见可执行目录补进 PATH,保证 app-server 能正常拉起
-            extra = ["/opt/homebrew/bin", "/usr/local/bin",
-                     os.path.expanduser("~/.local/bin")]
-            env.insert("PATH", ":".join(extra) + ":"
-                       + (env.value("PATH") or "/usr/bin:/bin:/usr/sbin:/sbin"))
-        proc.setProcessEnvironment(env)
+        proc.setProcessEnvironment(self._child_env())
         proc.readyReadStandardOutput.connect(self._on_stdout)
         proc.readyReadStandardError.connect(self._on_stderr)
         proc.started.connect(self._on_started)
@@ -305,6 +315,10 @@ class CodexClient(QObject):
             self._last_snapshot = snapshot
             payload = snapshot.to_dict()
             payload["updated_at"] = time.time()
+            primary = snapshot.primary
+            self._last_remaining = primary.remaining
+            self._last_resets_at = primary.resets_at
+            self._schedule_anchor()
             self.limitsUpdated.emit(payload)
 
     def _handle_error_response(self, req_id, error: dict) -> None:
@@ -322,3 +336,73 @@ class CodexClient(QObject):
         self._pending_reads.add(req_id)
 
     # 解析在 _handle_response 中分发:给 read 请求分配的 id 需要跟踪
+
+    # ------------------------------------------------------------- CD 锚定
+
+    def _child_env(self) -> QProcessEnvironment:
+        """子进程环境:GUI 启动时 PATH 有限,补常见可执行目录。"""
+        env = QProcessEnvironment.systemEnvironment()
+        if sys.platform == "darwin":
+            extra = ["/opt/homebrew/bin", "/usr/local/bin",
+                     os.path.expanduser("~/.local/bin")]
+            env.insert("PATH", ":".join(extra) + ":"
+                       + (env.value("PATH") or "/usr/bin:/bin:/usr/sbin:/sbin"))
+        return env
+
+    def _schedule_anchor(self) -> None:
+        """CD 锚定排程:主窗口用完(remaining=0)且未重置时,在重置时刻
+        自动发一条最小请求"开窗",让 5 小时周期从重置节点起算、首尾相接。
+
+        窗口计时从第一次真实请求开始(纯读接口不算),若等用户下次才用,
+        窗口起点被动后延。开关:~/.codex-pet/config.json "auto_anchor": true
+        (默认关——会自动产生真实请求,须用户知情开启)。
+        """
+        if not load_config().get("auto_anchor"):
+            return
+        resets_at = self._last_resets_at
+        if (self._last_remaining != 0 or resets_at is None
+                or resets_at <= time.time()):
+            return
+        delay_ms = max(1000, int((resets_at + ANCHOR_DELAY_S - time.time()) * 1000))
+        self._anchor_timer.start(delay_ms)
+
+    def _maybe_anchor(self) -> None:
+        """锚定时刻到:通过全部守卫才真正发起锚定请求。"""
+        if (not load_config().get("auto_anchor")
+                or getattr(self, "_codex_exe", None) is None
+                or self._last_remaining != 0
+                or self._last_resets_at is None
+                or self._anchor_proc is not None):
+            return
+        late = time.time() - self._last_resets_at
+        if late > ANCHOR_LATE_LIMIT_S:
+            # 错过太久(如睡眠唤醒):不锚,让用户下次真实使用自然开窗
+            return
+        self._fire_anchor()
+
+    def _fire_anchor(self) -> None:
+        proc = QProcess(self)
+        proc.setProgram(self._codex_exe)
+        proc.setArguments([*self._codex_args, "exec", "--skip-git-repo-check",
+                           ANCHOR_PROMPT])
+        proc.setWorkingDirectory(os.path.expanduser("~"))
+        proc.setProcessEnvironment(self._child_env())
+        proc.finished.connect(self._on_anchor_finished)
+        proc.errorOccurred.connect(self._on_anchor_failed)
+        self._anchor_proc = proc
+        QTimer.singleShot(ANCHOR_TIMEOUT_MS, self._kill_stale_anchor)
+        proc.start()
+
+    def _kill_stale_anchor(self) -> None:
+        if self._anchor_proc is not None:
+            self._anchor_proc.kill()
+
+    def _on_anchor_finished(self, _code, _status) -> None:
+        self._anchor_proc = None
+        # 锚定成功则此次读取拿到新窗口(remaining≈100、resets_at=锚点+5h),
+        # 链式排程下一次;若服务端尚未滚动,退回兜底轮询
+        self.refresh()
+
+    def _on_anchor_failed(self, _err) -> None:
+        self._anchor_proc = None
+        self.refresh()
