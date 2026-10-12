@@ -33,6 +33,13 @@ if sys.platform == "win32":
     _win_from_point = _user32.WindowFromPoint
     _win_from_point.argtypes = [_POINT]
     _win_from_point.restype = wintypes.HWND
+
+    # WinEventProc:被钩窗口 z 序变化时经 Qt 消息循环回调(主线程)
+    _WinEventProc = ctypes.WINFUNCTYPE(
+        wintypes.HWND, wintypes.DWORD, wintypes.HWND, wintypes.LONG,
+        wintypes.LONG, wintypes.DWORD, wintypes.DWORD)
+    EVENT_OBJECT_REORDER = 0x8004
+    WINEVENT_OUTOFCONTEXT = 0x0000
 else:  # 模块在非 Windows 上仅作导入兼容,不触碰 Win32
     _user32 = None
     _win_from_point = None
@@ -72,11 +79,18 @@ class TaskbarBar(StatusBarBase):
         self._stable_base: QPoint | None = None
         super().__init__(parent)
 
-        # 被盖检测 250ms(Windows 置顶强化)
+        # 被盖检测 250ms 兜底轮询(Windows 置顶强化)
         self._fast_timer = QTimer(self)
         self._fast_timer.setInterval(250)
         self._fast_timer.timeout.connect(self._reassert_topmost)
         self._fast_timer.start()
+
+        # 任务栏 z 序事件钩子:被点击抬升时毫秒级重排,消除轮询盲区闪烁
+        self._hook_proc = None
+        self._hook_handle = None
+        self._taskbar_hwnd = 0
+        if sys.platform == "win32":
+            self._install_order_hook()
 
     # ------------------------------------------------------------------ 位置
 
@@ -156,6 +170,10 @@ class TaskbarBar(StatusBarBase):
 
     def _maintain(self) -> None:
         """周期维护:全屏应用时自动隐藏 + 稳定锚定(位置不在每秒循环里动)。"""
+        if sys.platform == "win32" and self._taskbar_hwnd and \
+                not ctypes.windll.user32.IsWindow(self._taskbar_hwnd):
+            # explorer 重启后任务栏窗口重建:重挂 z 序事件钩子
+            self._install_order_hook()
         if self._user_hidden:
             return
         if self._fullscreen_app_active():
@@ -167,13 +185,41 @@ class TaskbarBar(StatusBarBase):
             self.show()
         self._update_anchor()
 
-    def _reassert_topmost(self) -> None:
-        """周期性保证余额条可见:检测是否被盖住(如点击任务栏后任务栏被
-        提到 topmost 层顶端,而余额条恰好住在任务栏区域内),被盖住则用
-        HWND_TOP 在 topmost 层内重排到顶端;否则轻量维持置顶。
+    def _install_order_hook(self) -> None:
+        """EVENT_OBJECT_REORDER 钩住任务栏窗口:它被点击抬升(z 序变化)的
+        瞬间经 Qt 消息循环回调 _reassert_topmost,毫秒级恢复被盖的余额条,
+        消除轮询盲区造成的"闪一下"。explorer 重启后由 _maintain 重挂。
+        """
+        try:
+            if self._hook_proc is not None and self._hook_handle:
+                _user32.UnhookWinEvent(self._hook_handle)
+            self._hook_proc = None
+            self._hook_handle = None
+            self._taskbar_hwnd = _user32.FindWindowW("Shell_TrayWnd", None)
+            if not self._taskbar_hwnd:
+                return
+            tid = _user32.GetWindowThreadProcessId(self._taskbar_hwnd, None)
 
-        注意:这台系统上 NOTOPMOST→TOPMOST 舞步与 hide/show 重显都只会
-        把窗口插回 topmost 层底部,唯有 HWND_TOP 能在层内真正重排。
+            def _cb(_hook, _event, hwnd, id_object, _id_child, _thread, _time):
+                if id_object == 0 and hwnd and hwnd == self._taskbar_hwnd:
+                    self._reassert_topmost()
+
+            self._hook_proc = _WinEventProc(_cb)
+            self._hook_handle = _user32.SetWinEventHook(
+                EVENT_OBJECT_REORDER, EVENT_OBJECT_REORDER, None,
+                self._hook_proc, 0, tid, WINEVENT_OUTOFCONTEXT)
+        except Exception:
+            self._hook_proc = None
+            self._hook_handle = None
+
+    def _reassert_topmost(self) -> None:
+        """被其他置顶窗口(如点击任务栏后被抬升的任务栏)盖住时,在
+        topmost 层内重排回顶端(HWND_TOP 是层内真正重排的唯一手段)。
+
+        关键:只在被盖住时才动。以前无论是否被盖都周期性
+        SetWindowPos(HWND_TOPMOST)——分层窗口每次调用都会触发 DWM
+        重绘,产生可见闪烁;现在不动 = 不重绘 = 不闪,配合 z 序事件
+        钩子,被盖时长从最长 250ms 压到一帧以内。
         """
         if sys.platform != "win32" or not self.isVisible():
             return
@@ -189,16 +235,12 @@ class TaskbarBar(StatusBarBase):
                 int((self.x() + self.width() / 2) * dpr),
                 int((self.y() + self.height() / 2) * dpr),
             )
-            covered = True
             hwnd_at = _win_from_point(pt)
             if hwnd_at:
                 root = _user32.GetAncestor(hwnd_at, 2)  # GA_ROOT
-                covered = root != hwnd
-
-            if covered:
-                user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, SWP_FLAGS)  # HWND_TOP
-            else:
-                user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, SWP_FLAGS)  # HWND_TOPMOST
+                if root == hwnd:
+                    return  # 已在最上层,什么都不做
+            user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, SWP_FLAGS)  # HWND_TOP
         except Exception:
             pass
 
