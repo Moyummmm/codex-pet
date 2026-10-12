@@ -50,10 +50,10 @@ check("用完+未来重置 → 定时器已排程", c._anchor_timer.isActive())
 check("排程时刻 ≈ resets_at+10s",
       abs(c._anchor_timer.remainingTime() / 1000 - (future + 10 - time.time())) < 2)
 
-# 场景2:未用完 → 不排程
+# 场景2:未用完 → 也排程(每次刷新都锚定,窗口节奏钉死在 5h 网格)
 c2, f2, r2 = make_client(True)
 feed(c2, 45, future)
-check("未用完 → 不排程", not c2._anchor_timer.isActive())
+check("未用完 → 也排程", c2._anchor_timer.isActive())
 
 # 场景3:开关关 → 不排程
 c3, f3, r3 = make_client(False)
@@ -79,12 +79,12 @@ c6._last_resets_at = time.time() - 400    # 错过 6.7 分钟
 c6._maybe_anchor()
 check("错过 >5 分钟 → 放弃锚定", len(f6) == 0)
 
-# 场景7:未用完时不发起
+# 场景7:未用完 → 也发起(不再要求耗尽)
 c7, f7, r7 = make_client(True)
 c7._last_remaining = 60
 c7._last_resets_at = time.time() - 2
 c7._maybe_anchor()
-check("未用完 → 不发起", len(f7) == 0)
+check("未用完 → 也发起", len(f7) == 1)
 
 # 场景8:锚定完成 → 刷新读取新窗口(链式)
 c8, f8, r8 = make_client(True)

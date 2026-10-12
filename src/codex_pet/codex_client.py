@@ -350,18 +350,19 @@ class CodexClient(QObject):
         return env
 
     def _schedule_anchor(self) -> None:
-        """CD 锚定排程:主窗口用完(remaining=0)且未重置时,在重置时刻
-        自动发一条最小请求"开窗",让 5 小时周期从重置节点起算、首尾相接。
+        """CD 锚定排程:每次拿到含未来 resets_at 的配额响应,就在重置时刻
+        自动发一条最小请求"开窗",把 5 小时窗口锚定在刷新节点上。
 
         窗口计时从第一次真实请求开始(纯读接口不算),若等用户下次才用,
-        窗口起点被动后延。开关:~/.codex-pet/config.json "auto_anchor": true
+        窗口起点被动后延。锚定后刷新节奏固定为 5 小时网格——用户中途才
+        开始用时,距下次刷新可能不足 5 小时,等待永远短于整窗。
+        开关:~/.codex-pet/config.json "auto_anchor": true
         (默认关——会自动产生真实请求,须用户知情开启)。
         """
         if not load_config().get("auto_anchor"):
             return
         resets_at = self._last_resets_at
-        if (self._last_remaining != 0 or resets_at is None
-                or resets_at <= time.time()):
+        if resets_at is None or resets_at <= time.time():
             return
         delay_ms = max(1000, int((resets_at + ANCHOR_DELAY_S - time.time()) * 1000))
         self._anchor_timer.start(delay_ms)
@@ -370,7 +371,6 @@ class CodexClient(QObject):
         """锚定时刻到:通过全部守卫才真正发起锚定请求。"""
         if (not load_config().get("auto_anchor")
                 or getattr(self, "_codex_exe", None) is None
-                or self._last_remaining != 0
                 or self._last_resets_at is None
                 or self._anchor_proc is not None):
             return
