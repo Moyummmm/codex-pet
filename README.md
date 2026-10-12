@@ -85,7 +85,7 @@ uv run --with pyinstaller pyinstaller --windowed \
     --name CodexPet --icon assets/CodexPet.icns \
     --paths src scripts/launcher.py --noconfirm                 # 出 dist/CodexPet.app
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.simonyuann.codexpet" \
-    -c "Set :CFBundleShortVersionString 1.4.3" \
+    -c "Set :CFBundleShortVersionString 1.4.4" \
     -c "Add :LSUIElement bool true" dist/CodexPet.app/Contents/Info.plist
 codesign --force --deep --sign - dist/CodexPet.app      # ad-hoc 签名
 ```
