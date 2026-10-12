@@ -1,0 +1,92 @@
+# Release 自动构建:推送 v* tag → macOS(Apple Silicon)+ Windows 双平台安装包
+# 自动挂到该 tag 的 Release,无需任何本地设备:
+#   git tag v1.5.1 && git push origin v1.5.1
+#
+# macOS:dist/CodexPet.app → zip(ad-hoc 签名,未公证)
+# Windows:dist/CodexPet.exe(onefile)→ zip
+# Release notes 由 GitHub 按 commits 自动生成(--generate-notes)。
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-latest  # Apple Silicon runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: 版本号对齐 tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i '' "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
+          sed -i '' "s/^__version__ = \".*\"/__version__ = \"$VERSION\"/" src/codex_pet/__init__.py
+
+      - name: 构建 CodexPet.app
+        run: |
+          uv sync
+          uv run python scripts/make_icns.py
+          uv run --with pyinstaller pyinstaller --windowed --name CodexPet \
+            --icon assets/CodexPet.icns --paths src scripts/launcher.py --noconfirm
+
+      - name: 元数据与 ad-hoc 签名
+        run: |
+          PLIST=dist/CodexPet.app/Contents/Info.plist
+          PB=/usr/libexec/PlistBuddy
+          $PB -c "Set :CFBundleIdentifier io.github.moyummmm.codexpet" "$PLIST" \
+            || $PB -c "Add :CFBundleIdentifier string io.github.moyummmm.codexpet" "$PLIST"
+          $PB -c "Set :CFBundleShortVersionString ${GITHUB_REF_NAME#v}" "$PLIST" \
+            || $PB -c "Add :CFBundleShortVersionString string ${GITHUB_REF_NAME#v}" "$PLIST"
+          $PB -c "Add :LSUIElement bool true" "$PLIST" || true
+          codesign --force --deep --sign - dist/CodexPet.app
+          codesign -v dist/CodexPet.app
+
+      - name: 发布 Release(macOS 附件先建 Release)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ZIP="CodexPet-${GITHUB_REF_NAME}-macos-arm64.zip"
+          ditto -c -k --sequesterRsrc --keepParent dist/CodexPet.app "$ZIP"
+          gh release create "$GITHUB_REF_NAME" "$ZIP" \
+            --title "Codex Pet ${GITHUB_REF_NAME}" \
+            --notes "自动构建。macOS(Apple Silicon)为 .app 未公证:首次打开右键 CodexPet.app → 打开,或 \`xattr -cr /Applications/CodexPet.app\`。Windows 为 onefile .exe(PyInstaller 打包,部分杀软可能误报,请从本 Release 页下载)。要求已安装并登录 Codex CLI。"
+
+  build-windows:
+    needs: build-macos  # Release 由 macOS job 创建,Windows job 追加附件
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: 版本号对齐 tag
+        shell: pwsh
+        run: |
+          $VERSION = $env:GITHUB_REF_NAME.Substring(1)
+          (Get-Content pyproject.toml) -replace '^version = ".*"', "version = `"$VERSION`"" | Set-Content pyproject.toml
+          (Get-Content src/codex_pet/__init__.py) -replace '^__version__ = ".*"', "__version__ = `"$VERSION`"" | Set-Content src/codex_pet/__init__.py
+
+      - name: 构建 CodexPet.exe
+        shell: pwsh
+        run: |
+          uv sync
+          uv run python scripts/make_icns.py assets/CodexPet.ico
+          uv run --with pyinstaller pyinstaller --onefile --windowed `
+            --name CodexPet --icon assets/CodexPet.ico `
+            --paths src scripts/launcher.py --noconfirm
+
+      - name: 上传 Windows 附件
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $ZIP = "CodexPet-$($env:GITHUB_REF_NAME)-windows-x64.zip"
+          Compress-Archive -Path dist/CodexPet.exe -DestinationPath $ZIP
+          gh release upload "$env:GITHUB_REF_NAME" $ZIP --clobber

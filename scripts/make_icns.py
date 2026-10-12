@@ -1,6 +1,9 @@
-"""生成 macOS 应用图标:Qt 离屏绘制电池+闪电 → iconutil 合成 .icns。
+"""生成应用图标:Qt 离屏绘制电池+⚡ → .icns(iconutil)/ .ico(PyInstaller Windows)。
 
-用法:uv run python scripts/make_icns.py [输出路径,默认 assets/CodexPet.icns]
+用法:uv run python scripts/make_icns.py [输出路径]
+  *.icns → iconutil 合成(macOS 打包用)
+  *.ico  → Qt 直接写出 256px(Windows PyInstaller 用,任意平台可生成)
+默认输出 assets/CodexPet.icns。
 """
 
 import os
@@ -83,6 +86,15 @@ def main() -> int:
     out = os.path.abspath(out)
 
     app = QApplication(sys.argv)
+
+    if out.endswith(".ico"):
+        # Windows:Qt 自带 ICO 写入;256px 单图,系统负责缩放
+        os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+        if not draw_icon(256).save(out):
+            print("ico save failed", file=sys.stderr)
+            return 1
+        print("saved", out)
+        return 0
 
     with tempfile.TemporaryDirectory() as tmp:
         iconset = os.path.join(tmp, "CodexPet.iconset")
