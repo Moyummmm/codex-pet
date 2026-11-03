@@ -3,6 +3,7 @@
 macOS:状态项即主显示——剩余额度以尽量大的数字直接显示,数字内部
 按剩余% 线性填充(下亮上暗),左键弹出详情面板,右键手动弹菜单
 (不挂原生菜单,规避 Qt 菜单追踪的 clickCount 断言崩溃)。
+Linux:托盘图标为主显示,左键切换详情面板,右键显示菜单。
 Windows:托盘图标为辅助,左键切换悬浮余额条,右键走原生菜单。
 """
 
@@ -18,6 +19,7 @@ from PyQt6.QtWidgets import QMenu, QSystemTrayIcon
 from .colors import deepseek_color, fill_color, ui_font
 
 IS_MAC = sys.platform == "darwin"
+IS_WINDOWS = sys.platform == "win32"
 
 
 def _draw_number(size: int, remaining: int | None, offline: bool,
@@ -100,7 +102,7 @@ def make_tray_icon(remaining: int | None, status: str,
 class Tray(QObject):
     refreshRequested = pyqtSignal()
     toggleBarRequested = pyqtSignal()    # 仅 Windows:切换悬浮余额条
-    showPanelRequested = pyqtSignal()    # 仅 macOS:弹出详情面板
+    showPanelRequested = pyqtSignal()    # macOS/Linux:弹出详情面板
     quitRequested = pyqtSignal()
 
     def __init__(self, parent: QObject | None = None) -> None:
@@ -108,10 +110,11 @@ class Tray(QObject):
 
         self.icon = QSystemTrayIcon(self)
         self.icon.setToolTip("Codex Pet")
+        self.icon.setIcon(make_tray_icon(None, "offline"))
 
         self._menu = QMenu()
         self.toggle_action = None
-        if not IS_MAC:
+        if IS_WINDOWS:
             self.toggle_action = QAction("隐藏余额条", self._menu)
             self.toggle_action.triggered.connect(self.toggleBarRequested.emit)
             self._menu.addAction(self.toggle_action)
@@ -137,7 +140,7 @@ class Tray(QObject):
 
     def _on_activated(self, reason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
-            if IS_MAC:
+            if not IS_WINDOWS:
                 self.showPanelRequested.emit()
             else:
                 self.toggleBarRequested.emit()

@@ -1,6 +1,6 @@
 """Codex Pet 入口:装配数据客户端、显示组件与托盘/菜单栏。
 
-macOS:菜单栏电池图标即主显示,左键弹出详情面板,无悬浮条。
+macOS/Linux:菜单栏或托盘图标即主显示,左键弹出详情面板。
 Windows:任务栏悬浮余额条 + 托盘辅助。
 
 自动检测 Codex 当前使用的提供方(读 ~/.codex/config.toml,每 60 秒):
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import signal
 import sys
+import os
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
@@ -31,6 +32,9 @@ def main() -> int:
     # 允许 Ctrl+C 杀掉(Python 默认信号只在外部事件循环触发)
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
+    # XWayland supports positioning floating windows; native Wayland does not.
+    if sys.platform.startswith("linux") and os.environ.get("DISPLAY"):
+        os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)  # 由托盘管理退出
     app.setApplicationName("Codex Pet")
@@ -41,7 +45,7 @@ def main() -> int:
     tray = Tray()
 
     bar = None
-    if not IS_MAC:
+    if sys.platform == "win32":
         from .taskbar_bar import TaskbarBar
         bar = TaskbarBar()
 
@@ -98,15 +102,18 @@ def main() -> int:
         push()
 
     def on_show_panel() -> None:
-        """macOS:点击菜单栏图标弹出/收起详情面板。"""
+        """点击托盘或菜单栏图标弹出/收起详情面板。"""
         if panel.isVisible():
             panel.hide_panel()
             return
         anchor = tray.anchor_point()
         screen = app.screenAt(anchor) or app.primaryScreen()
         avail = screen.availableGeometry()
-        anchor.setY(max(anchor.y(), avail.top()))  # 面板从菜单栏下沿开始
-        panel.popup_near(anchor, avail, [])
+        if sys.platform.startswith("linux"):
+            panel.popup_top_right(avail)
+        else:
+            anchor.setY(max(anchor.y(), avail.top()))  # 面板从菜单栏下沿开始
+            panel.popup_near(anchor, avail, [])
 
     def on_bar_clicked() -> None:
         if panel.isVisible():
@@ -178,6 +185,7 @@ def main() -> int:
         bar.clicked.connect(on_bar_clicked)
         bar.autoHidden.connect(on_bar_auto_hidden)
         bar.on_refresh = on_refresh_all
+        bar.on_quit = on_quit
         tray.toggleBarRequested.connect(on_toggle_bar)
     else:
         tray.showPanelRequested.connect(on_show_panel)

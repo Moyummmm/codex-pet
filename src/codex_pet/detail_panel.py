@@ -115,6 +115,7 @@ class DetailPanel(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
 
         self._payload: dict = {}
+        self._right_align_rect: QRect | None = None
         self._keep_rects: list[QRect] = []  # 点击这些区域内不关闭(面板自身 + 余额条)
         self._prev_held = False             # 上次轮询时鼠标按住状态(用于按下沿检测)
         # 刷新反馈:进行中禁用按钮;updated_at 变化 = 拿到新数据;超时提示
@@ -266,6 +267,9 @@ class DetailPanel(QWidget):
             self.secondary_row.update_data(None)
             self.updated_label.setText("等待数据…")
         self.adjustSize()
+        if self._right_align_rect is not None and self.isVisible():
+            rect = self._right_align_rect
+            self.move(max(rect.left(), rect.right() - self.width() + 1), rect.top())
 
     def _update_deepseek(self, ds: dict | None, status: str,
                          is_active: bool, model: str | None = None) -> None:
@@ -300,14 +304,26 @@ class DetailPanel(QWidget):
 
         keep_rects:除面板自身外,点击这些区域(如余额条)也不触发关闭。
         """
+        self._right_align_rect = None
         self._refresh_labels()
-        self._keep_rects = list(keep_rects or [])
         w, h = self.width(), self.height()
         x = anchor_global_pos.x() - w - 12
         if x < screen_rect.left():
             x = anchor_global_pos.x() + 12
         y = max(screen_rect.top(),
                 min(anchor_global_pos.y(), screen_rect.bottom() - h))
+        self._show_at(x, y, keep_rects)
+
+    def popup_top_right(self, screen_rect: QRect) -> None:
+        """Linux:将详情紧贴当前屏幕可用区域的右上角。"""
+        self._right_align_rect = QRect(screen_rect)
+        self._refresh_labels()
+        x = max(screen_rect.left(), screen_rect.right() - self.width() + 1)
+        self._show_at(x, screen_rect.top(), [])
+
+    def _show_at(self, x: int, y: int, keep_rects: list[QRect] | None) -> None:
+        self._refresh_labels()
+        self._keep_rects = list(keep_rects or [])
         self.move(x, y)
         self.show()
         self.raise_()

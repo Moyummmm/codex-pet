@@ -27,7 +27,7 @@
 
 ## 环境要求
 
-- Windows 10/11 或 macOS 12+(Apple Silicon)
+- Windows 10/11、macOS 12+(Apple Silicon)或 Linux x86_64
 - 已安装并登录 [Codex CLI](https://developers.openai.com/codex)(即 `codex` 命令可用,ChatGPT Plus 订阅)
 - [uv](https://docs.astral.sh/uv/)(Python 环境管理,仅源码运行需要)
 
@@ -45,6 +45,8 @@ uv run codex-pet
 ```
 
 首次运行会自动解析 `codex` 可执行文件位置并后台拉起 `codex app-server`。
+
+**Linux:** 可从源码运行或按下方说明自行打包。左键点击系统托盘图标弹出或收起详情，右键可刷新或退出；需要支持系统托盘的桌面环境。点击面板外部不会自动收起，可再次点击图标收起。Wayland 会话需要 XWayland 和 `DISPLAY`；程序默认使用 Qt 的 xcb 后端以支持窗口定位。
 
 ## 交互
 
@@ -67,6 +69,14 @@ uv run codex-pet
 ```
 
 ## 打包(可选)
+
+**Linux x86_64:**
+
+```bash
+uv run --with pyinstaller pyinstaller --onefile --windowed \
+    --name CodexPet --paths src scripts/launcher.py --noconfirm
+tar -czf CodexPet-linux-x86_64.tar.gz -C dist CodexPet
+```
 
 **Windows exe:**
 

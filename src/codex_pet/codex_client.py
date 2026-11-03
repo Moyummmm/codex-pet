@@ -8,8 +8,10 @@ ChatGPT Plus / Codex 配额。鉴权完全由 Codex CLI 自行处理,本项目�
 from __future__ import annotations
 
 import json
+import ast
 import os
 import shutil
+import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
@@ -23,6 +25,77 @@ RATE_LIMITS_UPDATED = "account/rateLimits/updated"
 POLL_INTERVAL_MS = 5 * 60 * 1000  # 兜底轮询:5 分钟
 RESTART_BASE_MS = 2000            # 进程崩溃重启退避基数
 RESTART_MAX_MS = 5 * 60 * 1000
+
+
+def _linux_system_proxy(env: QProcessEnvironment) -> None:
+    """Pass manual desktop proxy settings to CLI subprocesses when unset."""
+    if any(env.contains(k) for k in ("http_proxy", "https_proxy", "all_proxy",
+                                      "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")):
+        return
+    child_env = dict(os.environ)
+    if env.contains("LD_LIBRARY_PATH"):
+        child_env["LD_LIBRARY_PATH"] = env.value("LD_LIBRARY_PATH")
+    else:
+        child_env.pop("LD_LIBRARY_PATH", None)
+
+    desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+    if "kde" in desktop:
+        executable = shutil.which("kreadconfig6") or shutil.which("kreadconfig5")
+        if not executable:
+            return
+        def kde_read(key: str) -> str:
+            result = subprocess.run([executable, "--file", "kioslaverc", "--group",
+                                     "Proxy Settings", "--key", key], env=child_env,
+                                    capture_output=True, text=True, timeout=2, check=True)
+            return result.stdout.strip()
+        try:
+            if kde_read("ProxyType") != "1" or kde_read("ReversedException").lower() == "true":
+                return
+            for scheme in ("http", "https"):
+                value = kde_read(scheme + "Proxy")
+                if value:
+                    env.insert(scheme + "_proxy", value)
+            ignored = kde_read("NoProxyFor")
+            if ignored and not env.contains("no_proxy") and not env.contains("NO_PROXY"):
+                env.insert("no_proxy", ignored.replace(" ", ","))
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return
+    executable = shutil.which("gsettings")
+    if not executable:
+        return
+    def read(schema: str, key: str):
+        result = subprocess.run([executable, "get", schema, key], env=child_env,
+                                capture_output=True, text=True, timeout=2, check=True)
+        return ast.literal_eval(result.stdout.strip())
+
+    try:
+        if read("org.gnome.system.proxy", "mode") != "manual":
+            return
+        for scheme in ("http", "https"):
+            schema = "org.gnome.system.proxy." + scheme
+            host, port = read(schema, "host"), read(schema, "port")
+            if host and isinstance(port, int) and 0 < port < 65536:
+                if ":" in host and not host.startswith("["):
+                    host = f"[{host}]"
+                env.insert(scheme + "_proxy", f"http://{host}:{port}")
+        ignored = read("org.gnome.system.proxy", "ignore-hosts")
+        if isinstance(ignored, list) and not env.contains("no_proxy") and not env.contains("NO_PROXY"):
+            env.insert("no_proxy", ",".join(str(item) for item in ignored))
+    except (OSError, subprocess.SubprocessError, ValueError, SyntaxError):
+        return
+
+# CD 锚定(auto_anchor):额度刷新后,在窗口重置时刻 +5 分钟自动发一条
+# 真实模型请求(codex exec,轻量、消耗极少额度)"开窗"——窗口计时从第一次
+# 真实请求开始(纯读接口不算),这样刷新节奏钉死在 5 小时网格上,首尾相接。
+ANCHOR_DELAY_S = 300         # 重置后 5 分钟发起:给服务端记账/窗口滚动留足时间
+ANCHOR_LATE_LIMIT_S = 600    # 超过 重置+10 分钟 才触发(如睡眠唤醒)则放弃,等真实使用自然开窗
+ANCHOR_PROMPT = "你好,你可以做什么?"
+ANCHOR_TIMEOUT_MS = 120_000
+ANCHOR_ATTEMPT_MAX = 3       # 同一锚点最多尝试次数(exec 失败时退避重试)
+ANCHOR_READ_DELAY_MS = 5_000     # exec 成功后稍等再读,避开服务端滚动延迟
+ANCHOR_VERIFY_DELAY_MS = 30_000  # 读回仍是旧窗口(服务端未滚动)时的重读间隔
+ANCHOR_VERIFY_MAX = 3
 
 
 @dataclass
@@ -154,7 +227,7 @@ class CodexClient(QObject):
                         candidates.append((found, []))
             return candidates[0] if candidates else (None, [])
 
-        if sys.platform == "darwin":
+        if sys.platform in ("darwin", "linux"):
             home = os.path.expanduser("~")
             for path in (
                 "/opt/homebrew/bin/codex",
@@ -174,6 +247,11 @@ class CodexClient(QObject):
     def refresh(self) -> None:
         """立即拉取一次配额(手动刷新与定时轮询共用)。"""
         if self._proc is None or self._proc.state() == QProcess.ProcessState.NotRunning:
+            if self._codex_exe is None:
+                self._codex_exe, self._codex_args = self._locate_codex()
+                if self._codex_exe is None:
+                    self._set_status("offline")
+                    return
             self._start_process()
             return
         if self._initialized:
@@ -194,11 +272,19 @@ class CodexClient(QObject):
         proc.setArguments([*self._codex_args, "app-server"])
         # 保证子进程能读到 HOME/USERPROFILE 下的 ~/.codex
         env = QProcessEnvironment.systemEnvironment()
-        if sys.platform == "darwin":
+        if sys.platform.startswith("linux") and getattr(sys, "frozen", False):
+            if "LD_LIBRARY_PATH_ORIG" in os.environ:
+                env.insert("LD_LIBRARY_PATH", os.environ["LD_LIBRARY_PATH_ORIG"])
+            else:
+                env.remove("LD_LIBRARY_PATH")
+        if sys.platform.startswith("linux"):
+            _linux_system_proxy(env)
+        if sys.platform in ("darwin", "linux"):
             # GUI 启动时 PATH 有限:codex 可能是依赖 env node 的脚本垫片,
             # 把常见可执行目录补进 PATH,保证 app-server 能正常拉起
             extra = ["/opt/homebrew/bin", "/usr/local/bin",
-                     os.path.expanduser("~/.local/bin")]
+                     os.path.expanduser("~/.local/bin"),
+                     os.path.expanduser("~/.npm-global/bin")]
             env.insert("PATH", ":".join(extra) + ":"
                        + (env.value("PATH") or "/usr/bin:/bin:/usr/sbin:/sbin"))
         proc.setProcessEnvironment(env)
